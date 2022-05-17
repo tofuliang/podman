@@ -38,7 +38,7 @@ jobs:
     - name: Build
       run: |
           make BUILDTAGS=""
-          sudo make podman-release
+          sudo make podman-release.tar.gz
           
     - uses: actions/upload-artifact@v3
       with:

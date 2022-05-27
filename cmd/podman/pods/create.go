@@ -16,7 +16,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/containers"
 	"github.com/containers/podman/v4/cmd/podman/parse"
 	"github.com/containers/podman/v4/cmd/podman/registry"
-	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/errorhandling"
@@ -36,12 +35,14 @@ var (
   You can then start it at any time with the  podman pod start <pod_id> command. The pod will be created with the initial state 'created'.`
 
 	createCommand = &cobra.Command{
-		Use:               "create [options]",
-		Args:              validate.NoArgs,
+		Use:               "create [options] [NAME]",
+		Args:              cobra.MaximumNArgs(1),
 		Short:             "Create a new empty pod",
 		Long:              podCreateDescription,
 		RunE:              create,
 		ValidArgsFunction: completion.AutocompleteNone,
+		Example: `podman pod create
+  podman pod create --label foo=bar mypod`,
 	}
 )
 
@@ -115,6 +116,12 @@ func create(cmd *cobra.Command, args []string) error {
 		rawImageName string
 		podName      string
 	)
+	if len(args) > 0 {
+		if len(createOptions.Name) > 0 {
+			return fmt.Errorf("cannot specify --name and NAME at the same time")
+		}
+		createOptions.Name = args[0]
+	}
 	labelFile = infraOptions.LabelFile
 	labels = infraOptions.Label
 	createOptions.Labels, err = parse.GetAllLabels(labelFile, labels)
@@ -128,7 +135,7 @@ func create(cmd *cobra.Command, args []string) error {
 	img := imageName
 	if !createOptions.Infra {
 		if cmd.Flag("no-hosts").Changed {
-			return fmt.Errorf("cannot specify no-hosts without an infra container")
+			return fmt.Errorf("cannot specify --no-hosts without an infra container")
 		}
 		flags := cmd.Flags()
 		createOptions.Net, err = common.NetFlagsToNetOptions(nil, *flags)
@@ -159,7 +166,12 @@ func create(cmd *cobra.Command, args []string) error {
 		if strings.Contains(share, "cgroup") && shareParent {
 			return errors.Wrapf(define.ErrInvalidArg, "cannot define the pod as the cgroup parent at the same time as joining the infra container's cgroupNS")
 		}
-		createOptions.Share = strings.Split(share, ",")
+
+		if strings.HasPrefix(share, "+") {
+			createOptions.Share = append(createOptions.Share, strings.Split(specgen.DefaultKernelNamespaces, ",")...)
+			share = share[1:]
+		}
+		createOptions.Share = append(createOptions.Share, strings.Split(share, ",")...)
 		createOptions.ShareParent = &shareParent
 		if cmd.Flag("infra-command").Changed {
 			// Only send content to server side if user changed defaults

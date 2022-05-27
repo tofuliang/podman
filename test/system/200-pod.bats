@@ -335,8 +335,15 @@ EOF
     is "$output" ".*Invalid kernel namespace to share: bogus. Options are: cgroup, ipc, net, pid, uts or none" \
        "pod test for bogus --share option"
     run_podman pod create --share ipc --name $pod_name
+    run_podman pod inspect $pod_name --format "{{.SharedNamespaces}}"
+    is "$output" "[ipc]"
     run_podman run --rm --pod $pod_name --hostname foobar $IMAGE hostname
     is "$output" "foobar" "--hostname should work with non share UTS namespace"
+    run_podman pod create --share +pid --replace --name $pod_name
+    run_podman pod inspect $pod_name --format "{{.SharedNamespaces}}"
+    for ns in uts pid ipc net; do
+        is "$output" ".*$ns"
+    done
 }
 
 @test "podman pod create --pod new:$POD --hostname" {
@@ -387,20 +394,20 @@ EOF
     is "$output" "false" "Default network sharing should be false"
     run_podman pod rm test
 
-    run_podman pod create --name test --share ipc  --network private
+    run_podman pod create --share ipc  --network private test
     run_podman pod inspect test --format {{.InfraConfig.HostNetwork}}
     is "$output" "false" "Private network sharing with only ipc should be false"
     run_podman pod rm test
 
-    run_podman pod create --name test --share net  --network private
-    run_podman pod inspect test --format {{.InfraConfig.HostNetwork}}
+    local name="$(random_string 10 | tr A-Z a-z)"
+    run_podman pod create --name $name --share net  --network private
+    run_podman pod inspect $name --format {{.InfraConfig.HostNetwork}}
     is "$output" "false" "Private network sharing with only net should be false"
-    run_podman pod rm test
 
-    run_podman pod create --name test --share net --network host
-    run_podman pod inspect test --format {{.InfraConfig.HostNetwork}}
+    run_podman pod create --share net --network host --replace $name
+    run_podman pod inspect $name --format {{.InfraConfig.HostNetwork}}
     is "$output" "true" "Host network sharing with only net should be true"
-    run_podman pod rm test
+    run_podman pod rm $name
 
     run_podman pod create --name test --share ipc --network host
     run_podman pod inspect test --format {{.InfraConfig.HostNetwork}}

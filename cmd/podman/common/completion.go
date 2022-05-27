@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 
+	libimageDefine "github.com/containers/common/libimage/define"
 	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/pkg/sysregistriesv2"
@@ -16,6 +18,7 @@ import (
 	"github.com/containers/podman/v4/libpod/events"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/signal"
 	systemdDefine "github.com/containers/podman/v4/pkg/systemd/define"
 	"github.com/containers/podman/v4/pkg/util"
 	"github.com/spf13/cobra"
@@ -496,6 +499,11 @@ func AutocompleteImages(cmd *cobra.Command, args []string, toComplete string) ([
 	return getImages(cmd, toComplete)
 }
 
+// AutocompleteImageSearchFilters - Autocomplate `search --filter`.
+func AutocompleteImageSearchFilters(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return libimageDefine.SearchFilters, cobra.ShellCompDirectiveNoFileComp
+}
+
 // AutocompletePodExitPolicy - Autocomplete pod exit policy.
 func AutocompletePodExitPolicy(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	return config.PodExitPolicies, cobra.ShellCompDirectiveNoFileComp
@@ -595,7 +603,9 @@ func AutocompleteRunlabelCommand(cmd *cobra.Command, args []string, toComplete s
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	if len(args) == 0 {
-		// FIXME: What labels can we recommend here?
+		// This is unfortunate because the argument order is label followed by image.
+		// If it would be the other way around we could inspect the first arg and get
+		// all labels from it to suggest them.
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	if len(args) == 1 {
@@ -800,8 +810,7 @@ func AutocompleteLogDriver(cmd *cobra.Command, args []string, toComplete string)
 // AutocompleteLogOpt - Autocomplete log-opt options.
 // -> "path=", "tag="
 func AutocompleteLogOpt(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	// FIXME: are these the only one? the man page states these but in the current shell completion they are more options
-	logOptions := []string{"path=", "tag="}
+	logOptions := []string{"path=", "tag=", "max-size="}
 	if strings.HasPrefix(toComplete, "path=") {
 		return nil, cobra.ShellCompDirectiveDefault
 	}
@@ -840,10 +849,26 @@ func AutocompleteSecurityOption(cmd *cobra.Command, args []string, toComplete st
 }
 
 // AutocompleteStopSignal - Autocomplete stop signal options.
-// -> "SIGHUP", "SIGINT", "SIGKILL", "SIGTERM"
+// Autocompletes signals both lower or uppercase depending on the user input.
 func AutocompleteStopSignal(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	// FIXME: add more/different signals?
-	stopSignals := []string{"SIGHUP", "SIGINT", "SIGKILL", "SIGTERM"}
+	// convertCase will convert a string to lowercase only if the user input is lowercase
+	convertCase := func(s string) string { return s }
+	if len(toComplete) > 0 && unicode.IsLower(rune(toComplete[0])) {
+		convertCase = strings.ToLower
+	}
+
+	prefix := ""
+	// if input starts with "SI" we have to add SIG in front
+	// since the signal map does not have this prefix but the option
+	// allows signals with and without SIG prefix
+	if strings.HasPrefix(toComplete, convertCase("SI")) {
+		prefix = "SIG"
+	}
+
+	stopSignals := make([]string, 0, len(signal.SignalMap))
+	for sig := range signal.SignalMap {
+		stopSignals = append(stopSignals, convertCase(prefix+sig))
+	}
 	return stopSignals, cobra.ShellCompDirectiveNoFileComp
 }
 
@@ -1146,7 +1171,7 @@ func getMethodNames(f reflect.Value, prefix string) []formatSuggestion {
 		if kind == reflect.Struct || kind == reflect.Map {
 			suffix = "."
 		}
-		// From a template users POV it is not importent when the use a struct field or method.
+		// From a template users POV it is not important when the use a struct field or method.
 		// They only notice the difference when the function requires arguments.
 		// So lets be nice and let the user know that this method requires arguments via the help text.
 		// Note since this is actually a method on a type the first argument is always fix so we should skip it.

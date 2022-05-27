@@ -109,9 +109,10 @@ github.com/containers/buildah/pkg/rusage
 github.com/containers/buildah/pkg/sshagent
 github.com/containers/buildah/pkg/util
 github.com/containers/buildah/util
-# github.com/containers/common v0.48.1-0.20220512112240-7536bf6ff9b1
+# github.com/containers/common v0.48.1-0.20220523155016-2fd37da97824
 ## explicit
 github.com/containers/common/libimage
+github.com/containers/common/libimage/define
 github.com/containers/common/libimage/manifests
 github.com/containers/common/libnetwork/cni
 github.com/containers/common/libnetwork/etchosts
@@ -669,7 +670,7 @@ github.com/ulikunitz/xz/lzma
 github.com/vbatts/tar-split/archive/tar
 github.com/vbatts/tar-split/tar/asm
 github.com/vbatts/tar-split/tar/storage
-# github.com/vbauerster/mpb/v7 v7.4.1
+# github.com/vbauerster/mpb/v7 v7.4.2
 ## explicit
 github.com/vbauerster/mpb/v7
 github.com/vbauerster/mpb/v7/cwriter
@@ -734,7 +735,7 @@ golang.org/x/net/trace
 ## explicit
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.0.0-20220422013727-9388b58f7150
+# golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a
 ## explicit
 golang.org/x/sys/cpu
 golang.org/x/sys/execabs

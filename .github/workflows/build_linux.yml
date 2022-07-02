@@ -6,17 +6,26 @@ on:
 jobs:
   build:
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
 
     steps:
     - uses: actions/checkout@v3
-    
+      with:
+        ref: '1ce7ddab5c579e2fa8367774a938cfa722cd5006'
+
+    - name: Update golang
+      run: |
+          sudo apt-get purge golang*
+          git clone https://github.com/udhos/update-golang
+          cd update-golang
+          sudo ./update-golang.sh
+          go version
+
     - name: Install Dependencies
       run: |
           sudo apt-get update && sudo apt-get -y install \
           btrfs-progs \
           git \
-          golang-go \
           go-md2man \
           iptables \
           libassuan-dev \
@@ -44,3 +53,11 @@ jobs:
       with:
         name: podman-release
         path: ./podman-*.tar.gz
+
+    - name: 发布Release
+      uses: 'marvinpinto/action-automatic-releases@latest'
+      with:
+        repo_token: '${{ secrets.GITHUB_TOKEN }}'
+        automatic_release_tag: true
+        prerelease: false
+        files: ./podman-*.tar.gz

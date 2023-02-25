@@ -2,8 +2,8 @@ package pods
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"runtime"
 	"sort"
@@ -16,17 +16,15 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/containers"
 	"github.com/containers/podman/v4/cmd/podman/parse"
 	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/containers/podman/v4/pkg/errorhandling"
 	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/containers/podman/v4/pkg/specgenutil"
 	"github.com/containers/podman/v4/pkg/util"
 	"github.com/docker/docker/pkg/parsers"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 var (
@@ -64,7 +62,8 @@ func init() {
 	})
 	flags := createCommand.Flags()
 	flags.SetInterspersed(false)
-	common.DefineCreateFlags(createCommand, &infraOptions, true, false)
+	common.DefineCreateDefaults(&infraOptions)
+	common.DefineCreateFlags(createCommand, &infraOptions, entities.InfraMode)
 	common.DefineNetFlags(createCommand)
 
 	flags.BoolVar(&createOptions.Infra, "infra", true, "Create an infra container associated with the pod to share namespaces with")
@@ -98,20 +97,12 @@ func init() {
 	shareParentFlagName := "share-parent"
 	flags.BoolVar(&shareParent, shareParentFlagName, true, "Set the pod's cgroup as the cgroup parent for all containers joining the pod")
 
-	flags.SetNormalizeFunc(aliasNetworkFlag)
-}
-
-func aliasNetworkFlag(_ *pflag.FlagSet, name string) pflag.NormalizedName {
-	if name == "net" {
-		name = "network"
-	}
-	return pflag.NormalizedName(name)
+	flags.SetNormalizeFunc(utils.AliasFlags)
 }
 
 func create(cmd *cobra.Command, args []string) error {
 	var (
 		err          error
-		podIDFD      *os.File
 		imageName    string
 		rawImageName string
 		podName      string
@@ -126,19 +117,31 @@ func create(cmd *cobra.Command, args []string) error {
 	labels = infraOptions.Label
 	createOptions.Labels, err = parse.GetAllLabels(labelFile, labels)
 	if err != nil {
-		return errors.Wrapf(err, "unable to process labels")
+		return fmt.Errorf("unable to process labels: %w", err)
 	}
 
 	if cmd.Flag("infra-image").Changed {
 		imageName = infraImage
 	}
 	img := imageName
+
+	if !cmd.Flag("infra").Changed && (share == "none" || share == "") {
+		// we do not want an infra container when not sharing namespaces
+		createOptions.Infra = false
+	}
+
+	report, err := registry.ContainerEngine().NetworkExists(registry.Context(), "pasta")
+	if err != nil {
+		return err
+	}
+	pastaNetworkNameExists := report.Value
+
 	if !createOptions.Infra {
 		if cmd.Flag("no-hosts").Changed {
 			return fmt.Errorf("cannot specify --no-hosts without an infra container")
 		}
 		flags := cmd.Flags()
-		createOptions.Net, err = common.NetFlagsToNetOptions(nil, *flags)
+		createOptions.Net, err = common.NetFlagsToNetOptions(nil, *flags, pastaNetworkNameExists)
 		if err != nil {
 			return err
 		}
@@ -155,7 +158,7 @@ func create(cmd *cobra.Command, args []string) error {
 	} else {
 		// reassign certain options for lbpod api, these need to be populated in spec
 		flags := cmd.Flags()
-		infraOptions.Net, err = common.NetFlagsToNetOptions(nil, *flags)
+		infraOptions.Net, err = common.NetFlagsToNetOptions(nil, *flags, pastaNetworkNameExists)
 		if err != nil {
 			return err
 		}
@@ -164,7 +167,7 @@ func create(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if strings.Contains(share, "cgroup") && shareParent {
-			return errors.Wrapf(define.ErrInvalidArg, "cannot define the pod as the cgroup parent at the same time as joining the infra container's cgroupNS")
+			return fmt.Errorf("cannot define the pod as the cgroup parent at the same time as joining the infra container's cgroupNS: %w", define.ErrInvalidArg)
 		}
 
 		if strings.HasPrefix(share, "+") {
@@ -189,21 +192,9 @@ func create(cmd *cobra.Command, args []string) error {
 		createOptions.Name = podName
 	}
 
-	if cmd.Flag("pod-id-file").Changed {
-		podIDFD, err = util.OpenExclusiveFile(podIDFile)
-		if err != nil && os.IsExist(err) {
-			return errors.Errorf("pod id file exists. Ensure another pod is not using it or delete %s", podIDFile)
-		}
-		if err != nil {
-			return errors.Errorf("opening pod-id-file %s", podIDFile)
-		}
-		defer errorhandling.CloseQuiet(podIDFD)
-		defer errorhandling.SyncQuiet(podIDFD)
-	}
-
 	if len(createOptions.Net.PublishPorts) > 0 {
 		if !createOptions.Infra {
-			return errors.Errorf("you must have an infra container to publish port bindings to the host")
+			return fmt.Errorf("you must have an infra container to publish port bindings to the host")
 		}
 	}
 
@@ -230,7 +221,7 @@ func create(cmd *cobra.Command, args []string) error {
 	ret, err := parsers.ParseUintList(copy)
 	copy = ""
 	if err != nil {
-		return errors.Wrapf(err, "could not parse list")
+		return fmt.Errorf("could not parse list: %w", err)
 	}
 	var vals []int
 	for ind, val := range ret {
@@ -276,6 +267,7 @@ func create(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+
 		podSpec.Volumes = podSpec.InfraContainerSpec.Volumes
 		podSpec.ImageVolumes = podSpec.InfraContainerSpec.ImageVolumes
 		podSpec.OverlayVolumes = podSpec.InfraContainerSpec.OverlayVolumes
@@ -299,8 +291,8 @@ func create(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(podIDFile) > 0 {
-		if err = ioutil.WriteFile(podIDFile, []byte(response.Id), 0644); err != nil {
-			return errors.Wrapf(err, "failed to write pod ID to file")
+		if err := util.CreateIDFile(podIDFile, response.Id); err != nil {
+			return fmt.Errorf("failed to write pod ID to file: %w", err)
 		}
 	}
 	fmt.Println(response.Id)
@@ -315,5 +307,6 @@ func replacePod(name string) error {
 		Force:  true, // stop and remove pod
 		Ignore: true, // ignore if pod doesn't exist
 	}
-	return removePods([]string{name}, rmOptions, false)
+	errs := removePods([]string{name}, rmOptions, false)
+	return errs.PrintErrors()
 }

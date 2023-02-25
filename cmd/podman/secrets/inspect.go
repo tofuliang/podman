@@ -10,7 +10,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +25,23 @@ var (
 	}
 )
 
-var format string
+var (
+	format string
+	pretty bool
+)
+
+const (
+	prettyTemplate = `ID:              {{.ID}}
+Name:              {{.Spec.Name}}
+{{- if .Spec.Labels }}
+Labels:
+{{- range $k, $v := .Spec.Labels }}
+ - {{ $k }}{{if $v }}={{ $v }}{{ end }}
+{{- end }}{{ end }}
+Driver:            {{.Spec.Driver.Name}}
+Created at:        {{.CreatedAt}}
+Updated at:        {{.UpdatedAt}}`
+)
 
 func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{
@@ -35,8 +50,11 @@ func init() {
 	})
 	flags := inspectCmd.Flags()
 	formatFlagName := "format"
-	flags.StringVar(&format, formatFlagName, "", "Format volume output using Go template")
+	flags.StringVarP(&format, formatFlagName, "f", "", "Format inspect output using Go template")
 	_ = inspectCmd.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(&entities.SecretInfoReport{}))
+
+	prettyFlagName := "pretty"
+	flags.BoolVar(&pretty, prettyFlagName, false, "Print inspect output in human-readable format")
 }
 
 func inspect(cmd *cobra.Command, args []string) error {
@@ -47,24 +65,34 @@ func inspect(cmd *cobra.Command, args []string) error {
 		inspected = []*entities.SecretInfoReport{}
 	}
 
-	if cmd.Flags().Changed("format") {
-		row := report.NormalizeFormat(format)
-		formatted := report.EnforceRange(row)
+	switch {
+	case cmd.Flags().Changed("pretty"):
+		rpt := report.New(os.Stdout, cmd.Name())
+		defer rpt.Flush()
 
-		tmpl, err := report.NewTemplate("inspect").Parse(formatted)
+		rpt, err := rpt.Parse(report.OriginUser, prettyTemplate)
 		if err != nil {
 			return err
 		}
 
-		w, err := report.NewWriterDefault(os.Stdout)
+		if err := rpt.Execute(inspected); err != nil {
+			return err
+		}
+
+	case cmd.Flags().Changed("format"):
+		rpt := report.New(os.Stdout, cmd.Name())
+		defer rpt.Flush()
+
+		rpt, err := rpt.Parse(report.OriginUser, format)
 		if err != nil {
 			return err
 		}
-		defer w.Flush()
-		if err := tmpl.Execute(w, inspected); err != nil {
+
+		if err := rpt.Execute(inspected); err != nil {
 			return err
 		}
-	} else {
+
+	default:
 		buf, err := json.MarshalIndent(inspected, "", "    ")
 		if err != nil {
 			return err
@@ -78,7 +106,7 @@ func inspect(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "error inspecting secret: %v\n", err)
 			}
 		}
-		return errors.Errorf("inspecting secret: %v", errs[0])
+		return fmt.Errorf("inspecting secret: %w", errs[0])
 	}
 	return nil
 }

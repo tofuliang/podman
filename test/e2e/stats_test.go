@@ -79,9 +79,10 @@ var _ = Describe("Podman stats", func() {
 		session := podmanTest.RunTopContainer("")
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"stats", "--all", "--no-stream", "--format", "\"{{.ID}}\""})
+		session = podmanTest.Podman([]string{"stats", "--all", "--no-trunc", "--no-stream", "--format", "\"{{.ID}}\""})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
+		Expect(len(session.OutputToStringArray()[0])).Should(BeEquivalentTo(66))
 	})
 
 	It("podman stats with GO template", func() {
@@ -230,10 +231,21 @@ var _ = Describe("Podman stats", func() {
 		Expect(limits[0]).ToNot(Equal(limits[2]))
 
 		defaultLimit, err := strconv.Atoi(limits[0])
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		customLimit, err := strconv.Atoi(limits[2])
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		Expect(customLimit).To(BeNumerically("<", defaultLimit))
+	})
+
+	It("podman stats with a container that is not running", func() {
+		ctr := "created_container"
+		session := podmanTest.Podman([]string{"create", "--name", ctr, ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"stats", "--no-stream", ctr})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
 	})
 })

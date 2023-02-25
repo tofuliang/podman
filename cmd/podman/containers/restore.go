@@ -10,7 +10,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/cmd/podman/validate"
-	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/spf13/cobra"
@@ -93,32 +92,34 @@ func init() {
 }
 
 func restore(cmd *cobra.Command, args []string) error {
-	var errs utils.OutputErrors
+	var (
+		e    error
+		errs utils.OutputErrors
+	)
+	args = utils.RemoveSlash(args)
+
 	podmanStart := time.Now()
 	if rootless.IsRootless() {
 		return fmt.Errorf("restoring a container requires root")
 	}
 
-	// Find out if this is an image
-	inspectOpts := entities.InspectOptions{}
-	imgData, _, err := registry.ImageEngine().Inspect(context.Background(), args, inspectOpts)
-	if err != nil {
-		return err
-	}
-
-	hostInfo, err := registry.ContainerEngine().Info(context.Background())
-	if err != nil {
-		return err
-	}
-
-	for i := range imgData {
-		restoreOptions.CheckpointImage = true
-		checkpointRuntimeName, found := imgData[i].Annotations[define.CheckpointAnnotationRuntimeName]
-		if !found {
-			return fmt.Errorf("image is not a checkpoint: %s", imgData[i].ID)
+	// Check if the container exists (#15055)
+	exists := &entities.BoolReport{Value: false}
+	for _, ctr := range args {
+		exists, e = registry.ContainerEngine().ContainerExists(registry.GetContext(), ctr, entities.ContainerExistsOptions{})
+		if e != nil {
+			return e
 		}
-		if hostInfo.Host.OCIRuntime.Name != checkpointRuntimeName {
-			return fmt.Errorf("container image \"%s\" requires runtime: \"%s\"", imgData[i].ID, checkpointRuntimeName)
+		if exists.Value {
+			break
+		}
+	}
+
+	if !exists.Value {
+		// Find out if this is an image
+		restoreOptions.CheckpointImage, e = utils.IsCheckpointImage(context.Background(), args)
+		if e != nil {
+			return e
 		}
 	}
 
@@ -176,14 +177,15 @@ func restore(cmd *cobra.Command, args []string) error {
 	var statistics restoreStatistics
 
 	for _, r := range responses {
-		if r.Err == nil {
-			if restoreOptions.PrintStats {
-				statistics.ContainerStatistics = append(statistics.ContainerStatistics, r)
-			} else {
-				fmt.Println(r.Id)
-			}
-		} else {
+		switch {
+		case r.Err != nil:
 			errs = append(errs, r.Err)
+		case restoreOptions.PrintStats:
+			statistics.ContainerStatistics = append(statistics.ContainerStatistics, r)
+		case r.RawInput != "":
+			fmt.Println(r.RawInput)
+		default:
+			fmt.Println(r.Id)
 		}
 	}
 

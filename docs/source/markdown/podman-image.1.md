@@ -1,4 +1,4 @@
-% podman-image(1)
+% podman-image 1
 
 ## NAME
 podman\-image - Manage images
@@ -7,7 +7,7 @@ podman\-image - Manage images
 **podman image** *subcommand*
 
 ## DESCRIPTION
-The image command allows you to manage images
+The image command allows the management of images
 
 ## COMMANDS
 

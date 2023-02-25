@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +23,10 @@ import (
 
 	https://github.com/openshift/machine-config-operator/blob/master/pkg/server/server.go
 */
+
+const (
+	UserCertsTargetPath = "/etc/containers/certs.d"
+)
 
 // Convenience function to convert int to ptr
 func intToPtr(i int) *int {
@@ -93,7 +96,7 @@ func NewIgnitionFile(ign DynamicIgnition) error {
 			tz  string
 		)
 		// local means the same as the host
-		// lookup where it is pointing to on the host
+		// look up where it is pointing to on the host
 		if ign.TimeZone == "local" {
 			tz, err = getLocalTimeZone()
 			if err != nil {
@@ -227,7 +230,7 @@ WantedBy=sysinit.target
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(ign.WritePath, b, 0644)
+	return os.WriteFile(ign.WritePath, b, 0644)
 }
 
 func getDirs(usrName string) []Directory {
@@ -331,7 +334,7 @@ Delegate=memory pids cpu io
 		},
 	})
 
-	// Set containers.conf up for core user to use cni networks
+	// Set containers.conf up for core user to use networks
 	// by default
 	files = append(files, File{
 		Node: Node{
@@ -348,7 +351,7 @@ Delegate=memory pids cpu io
 		},
 	})
 
-	// Setup /etc/subuid and /etc/subgid
+	// Set up /etc/subuid and /etc/subgid
 	for _, sub := range []string{"/etc/subuid", "/etc/subgid"} {
 		files = append(files, File{
 			Node: Node{
@@ -496,24 +499,17 @@ Delegate=memory pids cpu io
 		if _, err := os.Stat(sslCertFile); err == nil {
 			certFiles = getCerts(sslCertFile, false)
 			files = append(files, certFiles...)
+		} else {
+			logrus.Warnf("Invalid path in SSL_CERT_FILE: %q", err)
+		}
+	}
 
-			if len(certFiles) > 0 {
-				setSSLCertFile := fmt.Sprintf("export %s=%s", "SSL_CERT_FILE", filepath.Join("/etc/containers/certs.d", filepath.Base(sslCertFile)))
-				files = append(files, File{
-					Node: Node{
-						Group: getNodeGrp("root"),
-						Path:  "/etc/profile.d/ssl_cert_file.sh",
-						User:  getNodeUsr("root"),
-					},
-					FileEmbedded1: FileEmbedded1{
-						Append: nil,
-						Contents: Resource{
-							Source: encodeDataURLPtr(setSSLCertFile),
-						},
-						Mode: intToPtr(0644),
-					},
-				})
-			}
+	if sslCertDir, ok := os.LookupEnv("SSL_CERT_DIR"); ok {
+		if _, err := os.Stat(sslCertDir); err == nil {
+			certFiles = getCerts(sslCertDir, true)
+			files = append(files, certFiles...)
+		} else {
+			logrus.Warnf("Invalid path in SSL_CERT_DIR: %q", err)
 		}
 	}
 
@@ -559,13 +555,13 @@ func getCerts(certsDir string, isDir bool) []File {
 }
 
 func prepareCertFile(path string, name string) (File, error) {
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
-		logrus.Warnf("Unable to read cert file %s", err.Error())
+		logrus.Warnf("Unable to read cert file %v", err)
 		return File{}, err
 	}
 
-	targetPath := filepath.Join("/etc/containers/certs.d", name)
+	targetPath := filepath.Join(UserCertsTargetPath, name)
 
 	logrus.Debugf("Copying cert file from '%s' to '%s'.", path, targetPath)
 

@@ -1,6 +1,7 @@
 approvers:
   - Luap99
   - TomSweeneyRedHat
+  - alexlarsson
   - ashley-cui
   - baude
   - edsantiago
@@ -10,15 +11,18 @@ approvers:
   - lsm5
   - mheon
   - mtrmac
+  - n1hility
   - rhatdan
   - saschagrunert
   - umohnani8
   - vrothberg
+  - ygalblum
   - zhangguanzhang
 reviewers:
   - Luap99
   - QiWang19
   - TomSweeneyRedHat
+  - alexlarsson
   - baude
   - cdoern
   - edsantiago
@@ -28,8 +32,10 @@ reviewers:
   - lsm5
   - mheon
   - mtrmac
+  - n1hility
   - rhatdan
   - saschagrunert
   - umohnani8
   - vrothberg
+  - ygalblum
   - zhangguanzhang

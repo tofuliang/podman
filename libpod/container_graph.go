@@ -2,10 +2,10 @@ package libpod
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/containers/podman/v4/libpod/define"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -60,7 +60,7 @@ func BuildContainerGraph(ctrs []*Container) (*ContainerGraph, error) {
 			// Get the dep's node
 			depNode, ok := graph.nodes[dep]
 			if !ok {
-				return nil, errors.Wrapf(define.ErrNoSuchCtr, "container %s depends on container %s not found in input list", node.id, dep)
+				return nil, fmt.Errorf("container %s depends on container %s not found in input list: %w", node.id, dep, define.ErrNoSuchCtr)
 			}
 
 			// Add the dependent node to the node's dependencies
@@ -85,7 +85,7 @@ func BuildContainerGraph(ctrs []*Container) (*ContainerGraph, error) {
 	if err != nil {
 		return nil, err
 	} else if cycle {
-		return nil, errors.Wrapf(define.ErrInternal, "cycle found in container dependency graph")
+		return nil, fmt.Errorf("cycle found in container dependency graph: %w", define.ErrInternal)
 	}
 
 	return graph, nil
@@ -150,7 +150,7 @@ func detectCycles(graph *ContainerGraph) (bool, error) {
 		if info.lowLink == info.index {
 			l := len(stack)
 			if l == 0 {
-				return false, errors.Wrapf(define.ErrInternal, "empty stack in detectCycles")
+				return false, fmt.Errorf("empty stack in detectCycles: %w", define.ErrInternal)
 			}
 
 			// Pop off the stack
@@ -160,7 +160,7 @@ func detectCycles(graph *ContainerGraph) (bool, error) {
 			// Popped item is no longer on the stack, mark as such
 			topInfo, ok := nodes[topOfStack.id]
 			if !ok {
-				return false, errors.Wrapf(define.ErrInternal, "error finding node info for %s", topOfStack.id)
+				return false, fmt.Errorf("finding node info for %s: %w", topOfStack.id, define.ErrInternal)
 			}
 			topInfo.onStack = false
 
@@ -203,7 +203,7 @@ func startNode(ctx context.Context, node *containerNode, setError bool, ctrError
 	if setError {
 		// Mark us as visited, and set an error
 		ctrsVisited[node.id] = true
-		ctrErrors[node.id] = errors.Wrapf(define.ErrCtrStateInvalid, "a dependency of container %s failed to start", node.id)
+		ctrErrors[node.id] = fmt.Errorf("a dependency of container %s failed to start: %w", node.id, define.ErrCtrStateInvalid)
 
 		// Hit anyone who depends on us, and set errors on them too
 		for _, successor := range node.dependedOn {
@@ -243,7 +243,7 @@ func startNode(ctx context.Context, node *containerNode, setError bool, ctrError
 	} else if len(depsStopped) > 0 {
 		// Our dependencies are not running
 		depsList := strings.Join(depsStopped, ",")
-		ctrErrors[node.id] = errors.Wrapf(define.ErrCtrStateInvalid, "the following dependencies of container %s are not running: %s", node.id, depsList)
+		ctrErrors[node.id] = fmt.Errorf("the following dependencies of container %s are not running: %s: %w", node.id, depsList, define.ErrCtrStateInvalid)
 		ctrErrored = true
 	}
 
@@ -279,5 +279,96 @@ func startNode(ctx context.Context, node *containerNode, setError bool, ctrError
 	// Recurse to anyone who depends on us and start them
 	for _, successor := range node.dependedOn {
 		startNode(ctx, successor, ctrErrored, ctrErrors, ctrsVisited, restart)
+	}
+}
+
+// Visit a node on the container graph and remove it, or set an error if it
+// failed to remove. Only intended for use in pod removal; do *not* use when
+// removing individual containers.
+// All containers are assumed to be *UNLOCKED* on running this function.
+// Container locks will be acquired as necessary.
+// Pod and infraID are optional. If a pod is given it must be *LOCKED*.
+func removeNode(ctx context.Context, node *containerNode, pod *Pod, force bool, timeout *uint, setError bool, ctrErrors map[string]error, ctrsVisited map[string]bool, ctrNamedVolumes map[string]*ContainerNamedVolume) {
+	// If we already visited this node, we're done.
+	if ctrsVisited[node.id] {
+		return
+	}
+
+	// Someone who depends on us failed.
+	// Mark us as failed and recurse.
+	if setError {
+		ctrsVisited[node.id] = true
+		ctrErrors[node.id] = fmt.Errorf("a container that depends on container %s could not be removed: %w", node.id, define.ErrCtrStateInvalid)
+
+		// Hit anyone who depends on us, set errors there as well.
+		for _, successor := range node.dependsOn {
+			removeNode(ctx, successor, pod, force, timeout, true, ctrErrors, ctrsVisited, ctrNamedVolumes)
+		}
+	}
+
+	// Does anyone still depend on us?
+	// Cannot remove if true. Once all our dependencies have been removed,
+	// we will be removed.
+	for _, dep := range node.dependedOn {
+		// The container that depends on us hasn't been removed yet.
+		// OK to continue on
+		if ok := ctrsVisited[dep.id]; !ok {
+			return
+		}
+	}
+
+	// Going to try to remove the node, mark us as visited
+	ctrsVisited[node.id] = true
+
+	ctrErrored := false
+
+	// Verify that all that depend on us are gone.
+	// Graph traversal should guarantee this is true, but this isn't that
+	// expensive, and it's better to be safe.
+	for _, dep := range node.dependedOn {
+		if _, err := node.container.runtime.GetContainer(dep.id); err == nil {
+			ctrErrored = true
+			ctrErrors[node.id] = fmt.Errorf("a container that depends on container %s still exists: %w", node.id, define.ErrDepExists)
+		}
+	}
+
+	// Lock the container
+	node.container.lock.Lock()
+
+	// Gate all subsequent bits behind a ctrErrored check - we don't want to
+	// proceed if a previous step failed.
+	if !ctrErrored {
+		if err := node.container.syncContainer(); err != nil {
+			ctrErrored = true
+			ctrErrors[node.id] = err
+		}
+	}
+
+	if !ctrErrored {
+		for _, vol := range node.container.config.NamedVolumes {
+			ctrNamedVolumes[vol.Name] = vol
+		}
+
+		if pod != nil && pod.state.InfraContainerID == node.id {
+			pod.state.InfraContainerID = ""
+			if err := pod.save(); err != nil {
+				ctrErrored = true
+				ctrErrors[node.id] = fmt.Errorf("error removing infra container %s from pod %s: %w", node.id, pod.ID(), err)
+			}
+		}
+	}
+
+	if !ctrErrored {
+		if err := node.container.runtime.removeContainer(ctx, node.container, force, false, true, false, timeout); err != nil {
+			ctrErrored = true
+			ctrErrors[node.id] = err
+		}
+	}
+
+	node.container.lock.Unlock()
+
+	// Recurse to anyone who we depend on and remove them
+	for _, successor := range node.dependsOn {
+		removeNode(ctx, successor, pod, force, timeout, ctrErrored, ctrErrors, ctrsVisited, ctrNamedVolumes)
 	}
 }

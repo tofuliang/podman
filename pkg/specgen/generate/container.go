@@ -3,8 +3,10 @@ package generate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,10 +18,8 @@ import (
 	envLib "github.com/containers/podman/v4/pkg/env"
 	"github.com/containers/podman/v4/pkg/signal"
 	"github.com/containers/podman/v4/pkg/specgen"
-	spec "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
+	"github.com/openshift/imagebuilder"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 func getImageFromSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerator) (*libimage.Image, string, *libimage.ImageData, error) {
@@ -38,9 +38,18 @@ func getImageFromSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGen
 	}
 
 	// Need to look up image.
-	image, resolvedName, err := r.LibimageRuntime().LookupImage(s.Image, nil)
+	lookupOptions := &libimage.LookupImageOptions{ManifestList: true}
+	image, resolvedName, err := r.LibimageRuntime().LookupImage(s.Image, lookupOptions)
 	if err != nil {
 		return nil, "", nil, err
+	}
+	manifestList, err := image.ToManifestList()
+	// only process if manifest list found otherwise expect it to be regular image
+	if err == nil {
+		image, err = manifestList.LookupInstance(ctx, s.ImageArch, s.ImageOS, s.ImageVariant)
+		if err != nil {
+			return nil, "", nil, err
+		}
 	}
 	s.SetImage(image, resolvedName)
 	inspectData, err := image.Inspect(ctx, nil)
@@ -106,7 +115,7 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 	// Get Default Environment from containers.conf
 	defaultEnvs, err := envLib.ParseSlice(rtc.GetDefaultEnvEx(s.EnvHost, s.HTTPProxy))
 	if err != nil {
-		return nil, errors.Wrap(err, "error parsing fields in containers.conf")
+		return nil, fmt.Errorf("parsing fields in containers.conf: %w", err)
 	}
 	var envs map[string]string
 
@@ -116,9 +125,20 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 		// already, overriding the default environments
 		envs, err = envLib.ParseSlice(inspectData.Config.Env)
 		if err != nil {
-			return nil, errors.Wrap(err, "Env fields from image failed to parse")
+			return nil, fmt.Errorf("env fields from image failed to parse: %w", err)
 		}
 		defaultEnvs = envLib.Join(envLib.DefaultEnvVariables(), envLib.Join(defaultEnvs, envs))
+	}
+
+	for _, e := range s.EnvMerge {
+		processedWord, err := imagebuilder.ProcessWord(e, envLib.Slice(defaultEnvs))
+		if err != nil {
+			return nil, fmt.Errorf("unable to process variables for --env-merge %s: %w", e, err)
+		}
+		splitWord := strings.Split(processedWord, "=")
+		if _, ok := defaultEnvs[splitWord[0]]; ok {
+			defaultEnvs[splitWord[0]] = splitWord[1]
+		}
 	}
 
 	for _, e := range s.UnsetEnv {
@@ -130,10 +150,8 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 	}
 	// First transform the os env into a map. We need it for the labels later in
 	// any case.
-	osEnv, err := envLib.ParseSlice(os.Environ())
-	if err != nil {
-		return nil, errors.Wrap(err, "error parsing host environment variables")
-	}
+	osEnv := envLib.Map(os.Environ())
+
 	// Caller Specified defaults
 	if s.EnvHost {
 		defaultEnvs = envLib.Join(defaultEnvs, osEnv)
@@ -155,7 +173,7 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 			return nil, err
 		}
 
-		// labels from the image that don't exist already
+		// labels from the image that don't already exist
 		if len(labels) > 0 && s.Labels == nil {
 			s.Labels = make(map[string]string)
 		}
@@ -182,16 +200,23 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 	// - "container" denotes the container should join the VM of the SandboxID
 	//   (the infra container)
 	if len(s.Pod) > 0 {
-		annotations[ann.SandboxID] = s.Pod
-		annotations[ann.ContainerType] = ann.ContainerTypeContainer
+		p, err := r.LookupPod(s.Pod)
+		if err != nil {
+			return nil, err
+		}
+		sandboxID := p.ID()
+		if p.HasInfraContainer() {
+			infra, err := p.InfraContainer()
+			if err != nil {
+				return nil, err
+			}
+			sandboxID = infra.ID()
+		}
+		annotations[ann.SandboxID] = sandboxID
 		// Check if this is an init-ctr and if so, check if
 		// the pod is running.  we do not want to add init-ctrs to
 		// a running pod because it creates confusion for us.
 		if len(s.InitContainerType) > 0 {
-			p, err := r.LookupPod(s.Pod)
-			if err != nil {
-				return nil, err
-			}
 			containerStatuses, err := p.Status()
 			if err != nil {
 				return nil, err
@@ -245,19 +270,7 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 	}
 
 	// If caller did not specify Pids Limits load default
-	if s.ResourceLimits == nil || s.ResourceLimits.Pids == nil {
-		if s.CgroupsMode != "disabled" {
-			limit := rtc.PidsLimit()
-			if limit != 0 {
-				if s.ResourceLimits == nil {
-					s.ResourceLimits = &spec.LinuxResources{}
-				}
-				s.ResourceLimits.Pids = &spec.LinuxPids{
-					Limit: limit,
-				}
-			}
-		}
-	}
+	s.InitResourceLimits(rtc)
 
 	if s.LogConfiguration == nil {
 		s.LogConfiguration = &specgen.LogConfig{}
@@ -293,63 +306,9 @@ func CompleteSpec(ctx context.Context, r *libpod.Runtime, s *specgen.SpecGenerat
 	return warnings, nil
 }
 
-// FinishThrottleDevices takes the temporary representation of the throttle
-// devices in the specgen and looks up the major and major minors. it then
-// sets the throttle devices proper in the specgen
-func FinishThrottleDevices(s *specgen.SpecGenerator) error {
-	if bps := s.ThrottleReadBpsDevice; len(bps) > 0 {
-		for k, v := range bps {
-			statT := unix.Stat_t{}
-			if err := unix.Stat(k, &statT); err != nil {
-				return err
-			}
-			v.Major = (int64(unix.Major(uint64(statT.Rdev)))) // nolint: unconvert
-			v.Minor = (int64(unix.Minor(uint64(statT.Rdev)))) // nolint: unconvert
-			if s.ResourceLimits.BlockIO == nil {
-				s.ResourceLimits.BlockIO = new(spec.LinuxBlockIO)
-			}
-			s.ResourceLimits.BlockIO.ThrottleReadBpsDevice = append(s.ResourceLimits.BlockIO.ThrottleReadBpsDevice, v)
-		}
-	}
-	if bps := s.ThrottleWriteBpsDevice; len(bps) > 0 {
-		for k, v := range bps {
-			statT := unix.Stat_t{}
-			if err := unix.Stat(k, &statT); err != nil {
-				return err
-			}
-			v.Major = (int64(unix.Major(uint64(statT.Rdev)))) // nolint: unconvert
-			v.Minor = (int64(unix.Minor(uint64(statT.Rdev)))) // nolint: unconvert
-			s.ResourceLimits.BlockIO.ThrottleWriteBpsDevice = append(s.ResourceLimits.BlockIO.ThrottleWriteBpsDevice, v)
-		}
-	}
-	if iops := s.ThrottleReadIOPSDevice; len(iops) > 0 {
-		for k, v := range iops {
-			statT := unix.Stat_t{}
-			if err := unix.Stat(k, &statT); err != nil {
-				return err
-			}
-			v.Major = (int64(unix.Major(uint64(statT.Rdev)))) // nolint: unconvert
-			v.Minor = (int64(unix.Minor(uint64(statT.Rdev)))) // nolint: unconvert
-			s.ResourceLimits.BlockIO.ThrottleReadIOPSDevice = append(s.ResourceLimits.BlockIO.ThrottleReadIOPSDevice, v)
-		}
-	}
-	if iops := s.ThrottleWriteIOPSDevice; len(iops) > 0 {
-		for k, v := range iops {
-			statT := unix.Stat_t{}
-			if err := unix.Stat(k, &statT); err != nil {
-				return err
-			}
-			v.Major = (int64(unix.Major(uint64(statT.Rdev)))) // nolint: unconvert
-			v.Minor = (int64(unix.Minor(uint64(statT.Rdev)))) // nolint: unconvert
-			s.ResourceLimits.BlockIO.ThrottleWriteIOPSDevice = append(s.ResourceLimits.BlockIO.ThrottleWriteIOPSDevice, v)
-		}
-	}
-	return nil
-}
-
 // ConfigToSpec takes a completed container config and converts it back into a specgenerator for purposes of cloning an existing container
-func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, contaierID string) (*libpod.Container, *libpod.InfraInherit, error) {
-	c, err := rt.LookupContainer(contaierID)
+func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, containerID string) (*libpod.Container, *libpod.InfraInherit, error) {
+	c, err := rt.LookupContainer(containerID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -383,9 +342,21 @@ func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, contaierID s
 	conf.Systemd = tmpSystemd
 	conf.Mounts = tmpMounts
 
-	if conf.Spec != nil && conf.Spec.Linux != nil && conf.Spec.Linux.Resources != nil {
-		if specg.ResourceLimits == nil {
-			specg.ResourceLimits = conf.Spec.Linux.Resources
+	if conf.Spec != nil {
+		if conf.Spec.Linux != nil && conf.Spec.Linux.Resources != nil {
+			if specg.ResourceLimits == nil {
+				specg.ResourceLimits = conf.Spec.Linux.Resources
+			}
+		}
+		if conf.Spec.Process != nil && conf.Spec.Process.Env != nil {
+			env := make(map[string]string)
+			for _, entry := range conf.Spec.Process.Env {
+				split := strings.SplitN(entry, "=", 2)
+				if len(split) == 2 {
+					env[split[0]] = split[1]
+				}
+			}
+			specg.Env = env
 		}
 	}
 
@@ -450,7 +421,7 @@ func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, contaierID s
 					specg.IpcNS = specgen.Namespace{NSMode: specgen.Default} // default
 				}
 			case "uts":
-				specg.UtsNS = specgen.Namespace{NSMode: specgen.Default} // default
+				specg.UtsNS = specgen.Namespace{NSMode: specgen.Private} // default
 			case "user":
 				if conf.AddCurrentUserPasswdEntry {
 					specg.UserNS = specgen.Namespace{NSMode: specgen.KeepID}
@@ -502,10 +473,12 @@ func ConfigToSpec(rt *libpod.Runtime, specg *specgen.SpecGenerator, contaierID s
 		}
 	}
 	specg.OverlayVolumes = overlay
-	_, mounts := c.SortUserVolumes(c.Spec())
+	_, mounts := c.SortUserVolumes(c.ConfigNoCopy().Spec)
 	specg.Mounts = mounts
 	specg.HostDeviceList = conf.DeviceHostSrc
 	specg.Networks = conf.Networks
+	specg.ShmSize = &conf.ShmSize
+	specg.ShmSizeSystemd = &conf.ShmSizeSystemd
 
 	mapSecurityConfig(conf, specg)
 
@@ -529,4 +502,42 @@ func mapSecurityConfig(c *libpod.ContainerConfig, s *specgen.SpecGenerator) {
 	s.User = c.User
 	s.Groups = c.Groups
 	s.HostUsers = c.HostUsers
+}
+
+// Check name looks for existing containers/pods with the same name, and modifies the given string until a new name is found
+func CheckName(rt *libpod.Runtime, n string, kind bool) string {
+	switch {
+	case strings.Contains(n, "-clone"):
+		ind := strings.Index(n, "-clone") + 6
+		num, err := strconv.Atoi(n[ind:])
+		if num == 0 && err != nil { // clone1 is hard to get with this logic, just check for it here.
+			if kind {
+				_, err = rt.LookupContainer(n + "1")
+			} else {
+				_, err = rt.LookupPod(n + "1")
+			}
+
+			if err != nil {
+				n += "1"
+				break
+			}
+		} else {
+			n = n[0:ind]
+		}
+		err = nil
+		count := num
+		for err == nil {
+			count++
+			tempN := n + strconv.Itoa(count)
+			if kind {
+				_, err = rt.LookupContainer(tempN)
+			} else {
+				_, err = rt.LookupPod(tempN)
+			}
+		}
+		n += strconv.Itoa(count)
+	default:
+		n += "-clone"
+	}
+	return n
 }

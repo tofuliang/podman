@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"io/ioutil"
 	"os"
 
 	. "github.com/containers/podman/v4/test/utils"
@@ -129,6 +128,7 @@ var _ = Describe("Podman kill", func() {
 	})
 
 	It("podman kill paused container", func() {
+		SkipIfRootlessCgroupsV1("pause is not supported for cgroupv1 rootless")
 		ctrName := "testctr"
 		session := podmanTest.RunTopContainer(ctrName)
 		session.WaitWithDefaultTimeout()
@@ -149,8 +149,8 @@ var _ = Describe("Podman kill", func() {
 	})
 
 	It("podman kill --cidfile", func() {
-		tmpDir, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		tmpFile := tmpDir + "cid"
 		defer os.RemoveAll(tmpDir)
 
@@ -169,13 +169,13 @@ var _ = Describe("Podman kill", func() {
 	})
 
 	It("podman kill multiple --cidfile", func() {
-		tmpDir1, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir1, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		tmpFile1 := tmpDir1 + "cid"
 		defer os.RemoveAll(tmpDir1)
 
-		tmpDir2, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir2, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		tmpFile2 := tmpDir2 + "cid"
 		defer os.RemoveAll(tmpDir2)
 
@@ -201,7 +201,7 @@ var _ = Describe("Podman kill", func() {
 		Expect(wait).Should(Exit(0))
 	})
 
-	It("podman stop --all", func() {
+	It("podman kill --all", func() {
 		session := podmanTest.RunTopContainer("")
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))

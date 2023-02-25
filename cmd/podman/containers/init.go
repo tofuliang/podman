@@ -69,15 +69,19 @@ func init() {
 
 func initContainer(cmd *cobra.Command, args []string) error {
 	var errs utils.OutputErrors
+	args = utils.RemoveSlash(args)
 	report, err := registry.ContainerEngine().ContainerInit(registry.GetContext(), args, initOptions)
 	if err != nil {
 		return err
 	}
 	for _, r := range report {
-		if r.Err == nil {
-			fmt.Println(r.Id)
-		} else {
+		switch {
+		case r.Err != nil:
 			errs = append(errs, r.Err)
+		case r.RawInput != "":
+			fmt.Println(r.RawInput)
+		default:
+			fmt.Println(r.Id)
 		}
 	}
 	return errs.PrintErrors()

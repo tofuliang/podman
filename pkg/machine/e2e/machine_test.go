@@ -1,9 +1,8 @@
-package e2e
+package e2e_test
 
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	url2 "net/url"
 	"os"
 	"path"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/containers/podman/v4/pkg/machine"
+	"github.com/containers/podman/v4/pkg/machine/qemu"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 }
 
 const (
-	defaultStream string = "podman-testing"
+	defaultStream machine.FCOSStream = machine.Testing
 )
 
 var (
@@ -44,7 +44,8 @@ func TestMachine(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	fcd, err := machine.GetFCOSDownload(defaultStream)
+	qemuVP := qemu.GetVirtualizationProvider()
+	fcd, err := machine.GetFCOSDownload(qemuVP, defaultStream)
 	if err != nil {
 		Fail("unable to get virtual machine image")
 	}
@@ -57,7 +58,7 @@ var _ = BeforeSuite(func() {
 				Fail(fmt.Sprintf("unable to create url for download: %q", err))
 			}
 			now := time.Now()
-			if err := machine.DownloadVMImage(getMe, fqImageName+".xz"); err != nil {
+			if err := machine.DownloadVMImage(getMe, suiteImageName, fqImageName+".xz"); err != nil {
 				Fail(fmt.Sprintf("unable to download machine image: %q", err))
 			}
 			fmt.Println("Download took: ", time.Since(now).String())
@@ -77,7 +78,7 @@ var _ = SynchronizedAfterSuite(func() {},
 
 func setup() (string, *machineTestBuilder) {
 	// Set TMPDIR if this needs a new directory
-	homeDir, err := ioutil.TempDir("", "podman_test")
+	homeDir, err := os.MkdirTemp("", "podman_test")
 	if err != nil {
 		Fail(fmt.Sprintf("failed to create home directory: %q", err))
 	}
@@ -96,6 +97,9 @@ func setup() (string, *machineTestBuilder) {
 	}
 	if err := os.Setenv("HOME", homeDir); err != nil {
 		Fail("failed to set home dir")
+	}
+	if err := os.Setenv("XDG_RUNTIME_DIR", homeDir); err != nil {
+		Fail("failed to set xdg_runtime dir")
 	}
 	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
 		Fail("unable to unset SSH_AUTH_SOCK")
@@ -120,13 +124,13 @@ func setup() (string, *machineTestBuilder) {
 }
 
 func teardown(origHomeDir string, testDir string, mb *machineTestBuilder) {
-	s := new(stopMachine)
+	r := new(rmMachine)
 	for _, name := range mb.names {
-		if _, err := mb.setName(name).setCmd(s).run(); err != nil {
+		if _, err := mb.setName(name).setCmd(r.withForce()).run(); err != nil {
 			fmt.Printf("error occurred rm'ing machine: %q\n", err)
 		}
 	}
-	if err := os.RemoveAll(testDir); err != nil {
+	if err := machine.GuardedRemoveAll(testDir); err != nil {
 		Fail(fmt.Sprintf("failed to remove test dir: %q", err))
 	}
 	// this needs to be last in teardown

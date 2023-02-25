@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -37,10 +36,10 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret create", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
-		session := podmanTest.Podman([]string{"secret", "create", "--driver-opts", "opt1=val", "a", secretFilePath})
+		session := podmanTest.Podman([]string{"secret", "create", "-d", "file", "--driver-opts", "opt1=val", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
 		secrID := session.OutputToString()
 		Expect(session).Should(Exit(0))
@@ -49,7 +48,7 @@ var _ = Describe("Podman secret", func() {
 		inspect.WaitWithDefaultTimeout()
 		Expect(inspect).Should(Exit(0))
 		Expect(inspect.OutputToString()).To(Equal(secrID))
-		inspect = podmanTest.Podman([]string{"secret", "inspect", "--format", "{{.Spec.Driver.Options}}", secrID})
+		inspect = podmanTest.Podman([]string{"secret", "inspect", "-f", "{{.Spec.Driver.Options}}", secrID})
 		inspect.WaitWithDefaultTimeout()
 		Expect(inspect).Should(Exit(0))
 		Expect(inspect.OutputToString()).To(ContainSubstring("opt1:val"))
@@ -57,8 +56,8 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret create bad name should fail", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "?!", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -67,8 +66,8 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret inspect", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -83,8 +82,8 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret inspect with --format", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -97,10 +96,27 @@ var _ = Describe("Podman secret", func() {
 		Expect(inspect.OutputToString()).To(Equal(secrID))
 	})
 
+	It("podman secret inspect with --pretty", func() {
+		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
+
+		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
+		session.WaitWithDefaultTimeout()
+		secrID := session.OutputToString()
+		Expect(session).Should(Exit(0))
+
+		inspect := podmanTest.Podman([]string{"secret", "inspect", "--pretty", secrID})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		Expect(inspect.OutputToString()).To(ContainSubstring("Name:"))
+		Expect(inspect.OutputToString()).To(ContainSubstring(secrID))
+	})
+
 	It("podman secret inspect multiple secrets", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -120,19 +136,18 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret inspect bogus", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		inspect := podmanTest.Podman([]string{"secret", "inspect", "bogus"})
 		inspect.WaitWithDefaultTimeout()
 		Expect(inspect).To(ExitWithError())
-
 	})
 
 	It("podman secret ls", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -145,15 +160,55 @@ var _ = Describe("Podman secret", func() {
 
 	})
 
+	It("podman secret ls --quiet", func() {
+		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
+
+		secretName := "a"
+
+		session := podmanTest.Podman([]string{"secret", "create", secretName, secretFilePath})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		secretID := session.OutputToString()
+
+		list := podmanTest.Podman([]string{"secret", "ls", "-q"})
+		list.WaitWithDefaultTimeout()
+		Expect(list).Should(Exit(0))
+		Expect(list.OutputToString()).To(Equal(secretID))
+
+		list = podmanTest.Podman([]string{"secret", "ls", "--quiet"})
+		list.WaitWithDefaultTimeout()
+		Expect(list).Should(Exit(0))
+		Expect(list.OutputToString()).To(Equal(secretID))
+
+		// Prefer format over quiet
+		list = podmanTest.Podman([]string{"secret", "ls", "-q", "--format", "{{.Name}}"})
+		list.WaitWithDefaultTimeout()
+		Expect(list).Should(Exit(0))
+		Expect(list.OutputToString()).To(Equal(secretName))
+
+	})
+
 	It("podman secret ls with filters", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		secret1 := "Secret1"
 		secret2 := "Secret2"
 
-		session := podmanTest.Podman([]string{"secret", "create", secret1, secretFilePath})
+		session := podmanTest.Podman([]string{"secret", "ls", "-n"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(Equal(""))
+
+		session = podmanTest.Podman([]string{"secret", "ls", "--noheading"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(Equal(""))
+
+		session = podmanTest.Podman([]string{"secret", "create", secret1, secretFilePath})
 		session.WaitWithDefaultTimeout()
 		secrID1 := session.OutputToString()
 		Expect(session).Should(Exit(0))
@@ -170,33 +225,39 @@ var _ = Describe("Podman secret", func() {
 		list := podmanTest.Podman([]string{"secret", "ls", "--filter", fmt.Sprintf("name=%s", secret1)})
 		list.WaitWithDefaultTimeout()
 		Expect(list).Should(Exit(0))
-		Expect(list.OutputToStringArray()).To(HaveLen(2), ContainSubstring(secret1))
+		Expect(list.OutputToStringArray()).To(HaveLen(2))
+		Expect(list.OutputToStringArray()[1]).To(ContainSubstring(secret1))
 
 		list = podmanTest.Podman([]string{"secret", "ls", "--filter", fmt.Sprintf("name=%s", secret2)})
 		list.WaitWithDefaultTimeout()
 		Expect(list).Should(Exit(0))
-		Expect(list.OutputToStringArray()).To(HaveLen(2), ContainSubstring(secret2))
+		Expect(list.OutputToStringArray()).To(HaveLen(2))
+		Expect(list.OutputToStringArray()[1]).To(ContainSubstring(secret2))
 
 		list = podmanTest.Podman([]string{"secret", "ls", "--filter", fmt.Sprintf("id=%s", secrID1)})
 		list.WaitWithDefaultTimeout()
 		Expect(list).Should(Exit(0))
-		Expect(list.OutputToStringArray()).To(HaveLen(2), ContainSubstring(secrID1))
+		Expect(list.OutputToStringArray()).To(HaveLen(2))
+		Expect(list.OutputToStringArray()[1]).To(ContainSubstring(secrID1))
 
 		list = podmanTest.Podman([]string{"secret", "ls", "--filter", fmt.Sprintf("id=%s", secrID2)})
 		list.WaitWithDefaultTimeout()
 		Expect(list).Should(Exit(0))
-		Expect(list.OutputToStringArray()).To(HaveLen(2), ContainSubstring(secrID2))
+		Expect(list.OutputToStringArray()).To(HaveLen(2))
+		Expect(list.OutputToStringArray()[1]).To(ContainSubstring(secrID2))
 
 		list = podmanTest.Podman([]string{"secret", "ls", "--filter", fmt.Sprintf("name=%s,name=%s", secret1, secret2)})
 		list.WaitWithDefaultTimeout()
 		Expect(list).Should(Exit(0))
-		Expect(list.OutputToStringArray()).To(HaveLen(3), ContainSubstring(secret1), ContainSubstring(secret2))
+		Expect(list.OutputToStringArray()).To(HaveLen(3))
+		Expect(list.OutputToString()).To(ContainSubstring(secret1))
+		Expect(list.OutputToString()).To(ContainSubstring(secret2))
 	})
 
 	It("podman secret ls with Go template", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -211,8 +272,8 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret rm", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -232,8 +293,8 @@ var _ = Describe("Podman secret", func() {
 
 	It("podman secret rm --all", func() {
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte("mysecret"), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "a", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -274,4 +335,41 @@ var _ = Describe("Podman secret", func() {
 		Expect(inspect.OutputToString()).To(Equal(secrID))
 	})
 
+	It("podman secret with labels", func() {
+		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
+		err := os.WriteFile(secretFilePath, []byte("mysecret"), 0755)
+		Expect(err).ToNot(HaveOccurred())
+
+		session := podmanTest.Podman([]string{"secret", "create", "--label", "foo=bar", "a", secretFilePath})
+		session.WaitWithDefaultTimeout()
+		secrID := session.OutputToString()
+		Expect(session).Should(Exit(0))
+
+		inspect := podmanTest.Podman([]string{"secret", "inspect", "--format", "{{.Spec.Labels}}", secrID})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		Expect(inspect.OutputToString()).To(ContainSubstring("foo:bar"))
+
+		session = podmanTest.Podman([]string{"secret", "create", "--label", "foo=bar", "--label", "a:b", "b", secretFilePath})
+		session.WaitWithDefaultTimeout()
+		secrID = session.OutputToString()
+		Expect(session).Should(Exit(0))
+
+		inspect = podmanTest.Podman([]string{"secret", "inspect", "--format", "{{.Spec.Labels}}", secrID})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		Expect(inspect.OutputToString()).To(ContainSubstring("foo:bar"))
+		Expect(inspect.OutputToString()).To(ContainSubstring("a:b"))
+
+		session = podmanTest.Podman([]string{"secret", "create", "c", secretFilePath})
+		session.WaitWithDefaultTimeout()
+		secrID = session.OutputToString()
+		Expect(session).Should(Exit(0))
+
+		inspect = podmanTest.Podman([]string{"secret", "inspect", "--format", "{{.Spec.Labels}}", secrID})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		Expect(inspect.OutputToString()).To(Equal("map[]"))
+
+	})
 })

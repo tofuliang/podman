@@ -8,7 +8,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/parse"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -31,8 +30,9 @@ var (
 var (
 	createOpts = entities.VolumeCreateOptions{}
 	opts       = struct {
-		Label []string
-		Opts  []string
+		Label  []string
+		Opts   []string
+		Ignore bool
 	}{}
 )
 
@@ -44,7 +44,7 @@ func init() {
 	flags := createCommand.Flags()
 
 	driverFlagName := "driver"
-	flags.StringVar(&createOpts.Driver, driverFlagName, "local", "Specify volume driver name")
+	flags.StringVarP(&createOpts.Driver, driverFlagName, "d", "local", "Specify volume driver name")
 	_ = createCommand.RegisterFlagCompletionFunc(driverFlagName, completion.AutocompleteNone)
 
 	labelFlagName := "label"
@@ -54,6 +54,9 @@ func init() {
 	optFlagName := "opt"
 	flags.StringArrayVarP(&opts.Opts, optFlagName, "o", []string{}, "Set driver specific options (default [])")
 	_ = createCommand.RegisterFlagCompletionFunc(optFlagName, completion.AutocompleteNone)
+
+	ignoreFlagName := "ignore"
+	flags.BoolVar(&opts.Ignore, ignoreFlagName, false, "Don't fail if volume already exists")
 }
 
 func create(cmd *cobra.Command, args []string) error {
@@ -63,13 +66,16 @@ func create(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		createOpts.Name = args[0]
 	}
+
+	createOpts.IgnoreIfExists = opts.Ignore
+
 	createOpts.Label, err = parse.GetAllLabels([]string{}, opts.Label)
 	if err != nil {
-		return errors.Wrapf(err, "unable to process labels")
+		return fmt.Errorf("unable to process labels: %w", err)
 	}
 	createOpts.Options, err = parse.GetAllLabels([]string{}, opts.Opts)
 	if err != nil {
-		return errors.Wrapf(err, "unable to process options")
+		return fmt.Errorf("unable to process options: %w", err)
 	}
 	response, err := registry.ContainerEngine().VolumeCreate(context.Background(), createOpts)
 	if err != nil {

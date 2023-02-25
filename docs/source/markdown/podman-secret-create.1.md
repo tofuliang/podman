@@ -1,4 +1,4 @@
-% podman-secret-create(1)
+% podman-secret-create 1
 
 ## NAME
 podman\-secret\-create - Create a new secret
@@ -20,21 +20,25 @@ Secrets will not be committed to an image with `podman commit`, and will not be 
 
 ## OPTIONS
 
-#### **--driver**=*driver*
+#### **--driver**, **-d**=*driver*
 
 Specify the secret driver (default **file**, which is unencrypted).
 
 #### **--driver-opts**=*key1=val1,key2=val2*
 
-Specify driver specific options
+Specify driver specific options.
 
 #### **--env**=*false*
 
-Read secret data from environment variable
+Read secret data from environment variable.
 
 #### **--help**
 
 Print usage statement.
+
+#### **--label**, **-l**=*key=val1,key2=val2*
+
+Add label to secret. These labels can be viewed in podman secrete inspect or ls.
 
 ## EXAMPLES
 

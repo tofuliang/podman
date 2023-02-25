@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/containers/podman/v4/libpod/logs/reversereader"
 	"github.com/nxadm/tail"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -105,7 +105,7 @@ func getTailLog(path string, tail int) ([]*LogLine, error) {
 		for {
 			s, err := rr.Read()
 			if err != nil {
-				if errors.Cause(err) == io.EOF {
+				if errors.Is(err, io.EOF) {
 					inputs <- []string{leftover}
 				} else {
 					logrus.Error(err)
@@ -143,7 +143,7 @@ func getTailLog(path string, tail int) ([]*LogLine, error) {
 				nllCounter++
 			}
 		}
-		// if we have enough log lines, we can hangup
+		// if we have enough log lines, we can hang up
 		if nllCounter >= tail {
 			break
 		}
@@ -228,47 +228,17 @@ func (l *LogLine) Until(until time.Time) bool {
 func NewLogLine(line string) (*LogLine, error) {
 	splitLine := strings.Split(line, " ")
 	if len(splitLine) < 4 {
-		return nil, errors.Errorf("'%s' is not a valid container log line", line)
+		return nil, fmt.Errorf("'%s' is not a valid container log line", line)
 	}
 	logTime, err := time.Parse(LogTimeFormat, splitLine[0])
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to convert time %s from container log", splitLine[0])
+		return nil, fmt.Errorf("unable to convert time %s from container log: %w", splitLine[0], err)
 	}
 	l := LogLine{
 		Time:         logTime,
 		Device:       splitLine[1],
 		ParseLogType: splitLine[2],
 		Msg:          strings.Join(splitLine[3:], " "),
-	}
-	return &l, nil
-}
-
-// NewJournaldLogLine creates a LogLine from the specified line from journald.
-// Note that if withID is set, the first item of the message is considerred to
-// be the container ID and set as such.
-func NewJournaldLogLine(line string, withID bool) (*LogLine, error) {
-	splitLine := strings.Split(line, " ")
-	if len(splitLine) < 4 {
-		return nil, errors.Errorf("'%s' is not a valid container log line", line)
-	}
-	logTime, err := time.Parse(LogTimeFormat, splitLine[0])
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to convert time %s from container log", splitLine[0])
-	}
-	var msg, id string
-	if withID {
-		id = splitLine[3]
-		msg = strings.Join(splitLine[4:], " ")
-	} else {
-		msg = strings.Join(splitLine[3:], " ")
-		// NO ID
-	}
-	l := LogLine{
-		Time:         logTime,
-		Device:       splitLine[1],
-		ParseLogType: splitLine[2],
-		Msg:          msg,
-		CID:          id,
 	}
 	return &l, nil
 }

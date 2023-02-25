@@ -114,7 +114,7 @@ var _ = Describe("Podman pod create", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		session = podmanTest.Podman([]string{"run", "-d", "--pod", podID, nginx})
+		session = podmanTest.Podman([]string{"run", "-d", "--pod", podID, NGINX_IMAGE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -125,6 +125,29 @@ var _ = Describe("Podman pod create", func() {
 		session = podmanTest.Podman([]string{"run", fedoraMinimal, "curl", "-f", "localhost"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).To(ExitWithError())
+
+		session = podmanTest.Podman([]string{"pod", "create", "--network", "host"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"run", "--name", "hostCtr", "--pod", session.OutputToString(), ALPINE, "readlink", "/proc/self/ns/net"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		ns := SystemExec("readlink", []string{"/proc/self/ns/net"})
+		ns.WaitWithDefaultTimeout()
+		Expect(ns).Should(Exit(0))
+		netns := ns.OutputToString()
+		Expect(netns).ToNot(BeEmpty())
+
+		Expect(session.OutputToString()).To(Equal(netns))
+
+		// Sanity Check for podman inspect
+		session = podmanTest.Podman([]string{"inspect", "--format", "'{{.NetworkSettings.SandboxKey}}'", "hostCtr"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).Should(Equal("''")) // no network path... host
+
 	})
 
 	It("podman pod correctly sets up IPCNS", func() {
@@ -214,11 +237,11 @@ var _ = Describe("Podman pod create", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		session = podmanTest.Podman([]string{"run", "-d", "--pod", podID, nginx})
+		session = podmanTest.Podman([]string{"run", "-d", "--pod", podID, NGINX_IMAGE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		session = podmanTest.Podman([]string{"run", "--pod", podID, "--network", "bridge", nginx, "curl", "-f", "localhost"})
+		session = podmanTest.Podman([]string{"run", "--pod", podID, "--network", "bridge", NGINX_IMAGE, "curl", "-f", "localhost"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).To(ExitWithError())
 	})
@@ -343,7 +366,7 @@ var _ = Describe("Podman pod create", func() {
 		result = podmanTest.Podman([]string{"ps", "-aq"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
-		Expect(len(result.OutputToStringArray())).Should(BeNumerically(">", 0))
+		Expect(result.OutputToStringArray()).ShouldNot(BeEmpty())
 
 		Expect(result.OutputToString()).To(ContainSubstring(infraID))
 	})
@@ -371,7 +394,7 @@ var _ = Describe("Podman pod create", func() {
 		result = podmanTest.Podman([]string{"ps", "-aq"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
-		Expect(len(result.OutputToStringArray())).Should(BeNumerically(">", 0))
+		Expect(result.OutputToStringArray()).ShouldNot(BeEmpty())
 
 		Expect(result.OutputToString()).To(ContainSubstring(infraID))
 	})
@@ -388,7 +411,7 @@ var _ = Describe("Podman pod create", func() {
 		Expect(session.ErrorToString()).To(ContainSubstring("extra host entries must be specified on the pod: network cannot be configured when it is shared with a pod"))
 
 		// verify we can see the pods hosts
-		session = podmanTest.Podman([]string{"run", "--pod", podID, ALPINE, "ping", "-c", "1", "host1"})
+		session = podmanTest.Podman([]string{"run", "--cap-add", "net_raw", "--pod", podID, ALPINE, "ping", "-c", "1", "host1"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})
@@ -412,4 +435,20 @@ var _ = Describe("Podman pod create", func() {
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring(hostname))
 	})
+
+	tests := []string{"", "none"}
+	for _, test := range tests {
+		test := test
+		It("podman pod create --share="+test+" should not create an infra ctr", func() {
+			session := podmanTest.Podman([]string{"pod", "create", "--share", test})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+
+			session = podmanTest.Podman([]string{"pod", "inspect", "--format", "{{.NumContainers}}", session.OutputToString()})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+			Expect(session.OutputToString()).Should((Equal("0")))
+		})
+	}
+
 })

@@ -28,7 +28,7 @@ var _ = Describe("Podman run with --ip flag", func() {
 		}
 		podmanTest = PodmanTestCreate(tempdir)
 		podmanTest.Setup()
-		// Cleanup the CNI networks used by the tests
+		// Clean up the CNI networks used by the tests
 		os.RemoveAll("/var/lib/cni/networks/podman")
 	})
 
@@ -66,7 +66,7 @@ var _ = Describe("Podman run with --ip flag", func() {
 	})
 
 	It("Podman run with specified static IPv6 has correct IP", func() {
-		netName := "ipv6-" + stringid.GenerateNonCryptoID()
+		netName := "ipv6-" + stringid.GenerateRandomID()
 		ipv6 := "fd46:db93:aa76:ac37::10"
 		net := podmanTest.Podman([]string{"network", "create", "--subnet", "fd46:db93:aa76:ac37::/64", netName})
 		net.WaitWithDefaultTimeout()
@@ -101,12 +101,19 @@ var _ = Describe("Podman run with --ip flag", func() {
 
 	It("Podman run two containers with the same IP", func() {
 		ip := GetRandomIPAddress()
-		result := podmanTest.Podman([]string{"run", "-d", "--name", "nginx", "--ip", ip, nginx})
+		result := podmanTest.Podman([]string{"run", "-d", "--name", "nginx", "--ip", ip, NGINX_IMAGE})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
 
+		// This test should not use a proxy
+		client := &http.Client{
+			Transport: &http.Transport{
+				Proxy: nil,
+			},
+		}
+
 		for retries := 20; retries > 0; retries-- {
-			response, err := http.Get(fmt.Sprintf("http://%s", ip))
+			response, err := client.Get(fmt.Sprintf("http://%s", ip))
 			if err == nil && response.StatusCode == http.StatusOK {
 				break
 			}

@@ -4,15 +4,14 @@
 set -e
 
 declare -A BUILD_TAGS
-# TODO: add systemd tag
-BUILD_TAGS[default]="apparmor,seccomp,selinux,linter"
-BUILD_TAGS[abi]="${BUILD_TAGS[default]},!remoteclient"
-BUILD_TAGS[tunnel]="${BUILD_TAGS[default]},remote,remoteclient"
+BUILD_TAGS[default]="apparmor,seccomp,selinux"
+BUILD_TAGS[abi]="${BUILD_TAGS[default]},systemd"
+BUILD_TAGS[tunnel]="${BUILD_TAGS[default]},remote"
 
 declare -A SKIP_DIRS
-SKIP_DIRS[abi]="pkg/machine/e2e"
+SKIP_DIRS[abi]=""
 # TODO: add "remote" build tag to pkg/api
-SKIP_DIRS[tunnel]="pkg/api,pkg/machine/e2e"
+SKIP_DIRS[tunnel]="pkg/api"
 
 [[ $1 == run ]] && shift
 

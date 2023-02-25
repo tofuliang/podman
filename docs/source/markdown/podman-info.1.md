@@ -1,4 +1,4 @@
-% podman-info(1)
+% podman-info 1
 
 ## NAME
 podman\-info - Displays Podman related system information
@@ -15,18 +15,25 @@ Displays information pertinent to the host, current storage stats, configured co
 
 ## OPTIONS
 
-#### **--debug**, **-D**
-
-Show additional information
-
-#### **--format**=*format*, **-f**
+#### **--format**, **-f**=*format*
 
 Change output format to "json" or a Go template.
 
+| **Placeholder**     | **Info pertaining to ...**              |
+| ------------------- | --------------------------------------- |
+| .Host ...           | ...the host on which podman is running  |
+| .Plugins ...        | ...external plugins                     |
+| .Registries ...     | ...configured registries                |
+| .Store ...          | ...the storage driver and paths         |
+| .Version ...        | ...podman version                       |
 
-## EXAMPLE
+Each of the above branch out into further subfields, more than can
+reasonably be enumerated in this document.
 
-Run podman info with plain text response:
+## EXAMPLES
+
+Run `podman info` for a YAML formatted response:
+
 ```
 $ podman info
 host:
@@ -84,7 +91,7 @@ host:
     path: /run/user/3267/podman/podman.sock
   security:
     apparmorEnabled: false
-    capabilities: CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID,CAP_SYS_CHROOT
+    capabilities: CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID
     rootless: true
     seccompEnabled: true
     seccompProfilePath: /usr/share/containers/seccomp.json
@@ -139,6 +146,7 @@ store:
   imageStore:
     number: 5
   runRoot: /run/user/3267/containers
+  transientStore: false
   volumePath: /home/dwalsh/.local/share/containers/storage/volumes
 version:
   APIVersion: 4.0.0
@@ -149,7 +157,9 @@ version:
   OsArch: linux/amd64
   Version: 4.0.0
 ```
-Run podman info with JSON formatted response:
+
+Run `podman info --format json` for a JSON formatted response:
+
 ```
 $ podman info --format json
 {
@@ -214,7 +224,7 @@ $ podman info --format json
     "serviceIsRemote": false,
     "security": {
       "apparmorEnabled": false,
-      "capabilities": "CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID,CAP_SYS_CHROOT",
+      "capabilities": "CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID",
       "rootless": true,
       "seccompEnabled": true,
       "seccompProfilePath": "/usr/share/containers/seccomp.json",
@@ -254,7 +264,8 @@ $ podman info --format json
       "number": 5
     },
     "runRoot": "/run/user/3267/containers",
-    "volumePath": "/home/dwalsh/.local/share/containers/storage/volumes"
+    "volumePath": "/home/dwalsh/.local/share/containers/storage/volumes",
+    "transientStore": false
   },
   "registries": {
     "search": [
@@ -289,11 +300,68 @@ $ podman info --format json
   }
 }
 ```
-Run podman info and only get the registries information.
+
+#### Extracting the list of container registries with a Go template
+
+If shell completion is enabled, type `podman info --format={{.` and then press `[TAB]` twice.
+
 ```
-$ podman info --format={{".Registries"}}
-map[registries:[docker.io quay.io registry.fedoraproject.org registry.access.redhat.com]]
+$ podman info --format={{.
+{{.Host.         {{.Plugins.      {{.Registries}}  {{.Store.        {{.Version.
 ```
+
+Press `R` `[TAB]` `[ENTER]` to print the registries information.
+
+```
+$ podman info -f {{.Registries}}
+map[search:[registry.fedoraproject.org registry.access.redhat.com docker.io quay.io]]
+$
+```
+
+The output still contains a map and an array. The map value can be extracted with
+
+```
+$ podman info -f '{{index .Registries "search"}}'
+[registry.fedoraproject.org registry.access.redhat.com docker.io quay.io]
+```
+
+The array can be printed as one entry per line
+
+```
+$ podman info -f '{{range index .Registries "search"}}{{.}}\n{{end}}'
+registry.fedoraproject.org
+registry.access.redhat.com
+docker.io
+quay.io
+
+```
+
+#### Extracting the list of container registries from JSON with jq
+
+The command-line JSON processor [__jq__](https://stedolan.github.io/jq/) can be used to extract the list
+of container registries.
+
+```
+$ podman info -f json | jq '.registries["search"]'
+[
+  "registry.fedoraproject.org",
+  "registry.access.redhat.com",
+  "docker.io",
+  "quay.io"
+]
+```
+
+The array can be printed as one entry per line
+
+```
+$ podman info -f json | jq -r '.registries["search"] | .[]'
+registry.fedoraproject.org
+registry.access.redhat.com
+docker.io
+quay.io
+```
+
+Note, the Go template struct fields start with upper case. When running `podman info` or `podman info --format=json`, the same names start with lower case.
 
 ## SEE ALSO
 **[podman(1)](podman.1.md)**, **[containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)**, **[containers-storage.conf(5)](https://github.com/containers/storage/blob/main/docs/containers-storage.conf.5.md)**

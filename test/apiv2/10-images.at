@@ -53,7 +53,7 @@ t POST "images/create?fromImage=alpine" 200 .error~null .status~".*Download comp
 t POST "images/create?fromImage=alpine&tag=latest" 200
 
 # 10977 - handle platform parameter correctly
-t POST "images/create?fromImage=testimage:20210610&platform=linux/arm64" 200
+t POST "images/create?fromImage=quay.io/libpod/testimage:20210610&platform=linux/arm64" 200
 t GET  "images/testimage:20210610/json" 200 \
   .Architecture=arm64
 
@@ -189,6 +189,13 @@ tar --format=posix -C $TMPD -cvf ${CONTAINERFILE_TAR} containerfile &> /dev/null
 t POST "libpod/build?dockerfile=containerfile" $CONTAINERFILE_TAR 200 \
   .stream~"STEP 1/1: FROM $IMAGE"
 
+# Newer Docker client sets empty cacheFrom for every build command even if it is not used,
+# following commit makes sure we test such use-case. See https://github.com/containers/podman/pull/16380
+#TODO: This test should be extended when buildah's cache-from and cache-to functionally supports
+# multiple remote-repos
+t POST "libpod/build?dockerfile=containerfile&cachefrom=[]" $CONTAINERFILE_TAR 200 \
+  .stream~"STEP 1/1: FROM $IMAGE"
+
 # With -q, all we should get is image ID. Test both libpod & compat endpoints.
 t POST "libpod/build?dockerfile=containerfile&q=true" $CONTAINERFILE_TAR 200 \
   .stream~'^[0-9a-f]\{64\}$'
@@ -203,12 +210,12 @@ t POST "build?dockerfile=containerfile" $CONTAINERFILE_TAR application/json 200 
 
 # Libpod: allow building from url: https://github.com/alpinelinux/docker-alpine.git and must ignore any provided tar
 t POST "libpod/build?remote=https%3A%2F%2Fgithub.com%2Falpinelinux%2Fdocker-alpine.git" $CONTAINERFILE_TAR 200 \
-  .stream~"STEP 1/5: FROM alpine:3.14"
+  .stream~"STEP 1/5: FROM alpine:"
 
 # Build api response header must contain Content-type: application/json
 t POST "build?dockerfile=containerfile" $CONTAINERFILE_TAR application/json 200
 response_headers=$(cat "$WORKDIR/curl.headers.out")
-like "$response_headers" ".*application/json.*" "header does not contains application/json"
+like "$response_headers" ".*application/json.*" "header does not contain application/json"
 
 # PR #12091: output from compat API must now include {"aux":{"ID":"sha..."}}
 t POST "build?dockerfile=containerfile" $CONTAINERFILE_TAR 200 \
@@ -227,16 +234,36 @@ t GET libpod/images/quay.io/libpod/busybox:latest/exists  204
 
 CONTAINERFILE_WITH_ERR_TAR="${TMPD}/containerfile.tar"
 cat > $TMPD/containerfile << EOF
-FROM quay.io/fedora/fedora
+FROM $IMAGE
 RUN echo 'some error' >&2
 EOF
 tar --format=posix -C $TMPD -cvf ${CONTAINERFILE_WITH_ERR_TAR} containerfile &> /dev/null
-t POST "build?q=1&dockerfile=containerfile" $CONTAINERFILE_WITH_ERR_TAR 200
-response_output=$(cat "$WORKDIR/curl.result.out")
-if [[ ${response_output} == *"some error"* ]];then
-    _show_ok 0 "compat quiet build" "~ $response_output" "found output from stderr in API"
+t POST "/build?q=1&dockerfile=containerfile" $CONTAINERFILE_WITH_ERR_TAR 200
+if [[ $output == *"some error"* ]];then
+    _show_ok 0 "compat quiet build" "[should not contain 'some error']" "$output"
+else
+    _show_ok 1 "compat quiet build"
 fi
 
 cleanBuildTest
+
+# compat API vs libpod API event differences:
+# on image removal, libpod produces 'remove' events.
+# compat produces 'delete' events.
+podman image build -t test:test -<<EOF
+from $IMAGE
+EOF
+
+START=$(date +%s)
+
+t DELETE libpod/images/test:test 200
+# HACK HACK HACK There is a race around events being added to the journal
+# This sleep seems to avoid the race.
+# If it fails and begins to flake, investigate a retry loop.
+sleep 1
+t GET "libpod/events?stream=false&since=$START"  200  \
+  'select(.status | contains("remove")).Action=remove'
+t GET "events?stream=false&since=$START"  200  \
+  'select(.status | contains("delete")).Action=delete'
 
 # vim: filetype=sh

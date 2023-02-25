@@ -1,13 +1,16 @@
 package images
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/errorhandling"
-	"github.com/pkg/errors"
+	"github.com/containers/storage/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -58,14 +61,15 @@ func imageRemoveFlagSet(flags *pflag.FlagSet) {
 	flags.BoolVarP(&imageOpts.All, "all", "a", false, "Remove all images")
 	flags.BoolVarP(&imageOpts.Ignore, "ignore", "i", false, "Ignore errors if a specified image does not exist")
 	flags.BoolVarP(&imageOpts.Force, "force", "f", false, "Force Removal of the image")
+	flags.BoolVar(&imageOpts.NoPrune, "no-prune", false, "Do not remove dangling images")
 }
 
 func rm(cmd *cobra.Command, args []string) error {
 	if len(args) < 1 && !imageOpts.All {
-		return errors.Errorf("image name or ID must be specified")
+		return errors.New("image name or ID must be specified")
 	}
 	if len(args) > 0 && imageOpts.All {
-		return errors.Errorf("when using the --all switch, you may not pass any images names or IDs")
+		return errors.New("when using the --all switch, you may not pass any images names or IDs")
 	}
 
 	// Note: certain image-removal errors are non-fatal.  Hence, the report
@@ -81,8 +85,19 @@ func rm(cmd *cobra.Command, args []string) error {
 				fmt.Println("Deleted: " + d)
 			}
 		}
-		registry.SetExitCode(report.ExitCode)
+		for _, err := range rmErrors {
+			if !imageOpts.Force || !strings.Contains(err.Error(), types.ErrImageUnknown.Error()) {
+				registry.SetExitCode(report.ExitCode)
+			}
+		}
 	}
 
-	return errorhandling.JoinErrors(rmErrors)
+	var errs utils.OutputErrors
+	for _, err := range rmErrors {
+		if imageOpts.Force && strings.Contains(err.Error(), types.ErrImageUnknown.Error()) {
+			continue
+		}
+		errs = append(errs, err)
+	}
+	return errorhandling.JoinErrors(errs)
 }

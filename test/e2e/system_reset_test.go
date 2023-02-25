@@ -68,6 +68,7 @@ var _ = Describe("podman system reset", func() {
 		Expect(session).Should(Exit(0))
 
 		Expect(session.ErrorToString()).To(Not(ContainSubstring("Failed to add pause process")))
+		Expect(session.ErrorToString()).To(Not(ContainSubstring("/usr/share/containers/storage.conf")))
 
 		session = podmanTest.Podman([]string{"images", "-n"})
 		session.WaitWithDefaultTimeout()
@@ -92,9 +93,12 @@ var _ = Describe("podman system reset", func() {
 
 		// TODO: machine tests currently don't run outside of the machine test pkg
 		// no machines are created here to cleanup
-		session = podmanTest.Podman([]string{"machine", "list", "-q"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		Expect(session.OutputToStringArray()).To(BeEmpty())
+		// machine commands are rootless only
+		if isRootless() {
+			session = podmanTest.Podman([]string{"machine", "list", "-q"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+			Expect(session.OutputToStringArray()).To(BeEmpty())
+		}
 	})
 })

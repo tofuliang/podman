@@ -3,7 +3,6 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,15 +51,15 @@ var _ = Describe("Podman login and logout", func() {
 			}
 		}
 
-		session := podmanTest.Podman([]string{"run", "--entrypoint", "htpasswd", "registry:2.6", "-Bbn", "podmantest", "test"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
+		htpasswd := SystemExec("htpasswd", []string{"-Bbn", "podmantest", "test"})
+		htpasswd.WaitWithDefaultTimeout()
+		Expect(htpasswd).Should(Exit(0))
 
 		f, err := os.Create(filepath.Join(authPath, "htpasswd"))
 		Expect(err).ToNot(HaveOccurred())
 		defer f.Close()
 
-		_, err = f.WriteString(session.OutputToString())
+		_, err = f.WriteString(htpasswd.OutputToString())
 		Expect(err).ToNot(HaveOccurred())
 		err = f.Sync()
 		Expect(err).ToNot(HaveOccurred())
@@ -80,12 +79,12 @@ var _ = Describe("Podman login and logout", func() {
 		setup := SystemExec("cp", []string{filepath.Join(certPath, "domain.crt"), filepath.Join(certDirPath, "ca.crt")})
 		setup.WaitWithDefaultTimeout()
 
-		session = podmanTest.Podman([]string{"run", "-d", "-p", strings.Join([]string{strconv.Itoa(port), strconv.Itoa(port)}, ":"),
+		session := podmanTest.Podman([]string{"run", "-d", "-p", strings.Join([]string{strconv.Itoa(port), strconv.Itoa(port)}, ":"),
 			"-e", strings.Join([]string{"REGISTRY_HTTP_ADDR=0.0.0.0", strconv.Itoa(port)}, ":"), "--name", "registry", "-v",
 			strings.Join([]string{authPath, "/auth:Z"}, ":"), "-e", "REGISTRY_AUTH=htpasswd", "-e",
 			"REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm", "-e", "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
 			"-v", strings.Join([]string{certPath, "/certs:Z"}, ":"), "-e", "REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt",
-			"-e", "REGISTRY_HTTP_TLS_KEY=/certs/domain.key", "registry:2.6"})
+			"-e", "REGISTRY_HTTP_TLS_KEY=/certs/domain.key", REGISTRY_IMAGE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -101,12 +100,12 @@ var _ = Describe("Podman login and logout", func() {
 	})
 
 	readAuthInfo := func(filePath string) map[string]interface{} {
-		authBytes, err := ioutil.ReadFile(filePath)
-		Expect(err).To(BeNil())
+		authBytes, err := os.ReadFile(filePath)
+		Expect(err).ToNot(HaveOccurred())
 
 		var authInfo map[string]interface{}
 		err = json.Unmarshal(authBytes, &authInfo)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		fmt.Println(authInfo)
 
 		const authsKey = "auths"
@@ -137,13 +136,13 @@ var _ = Describe("Podman login and logout", func() {
 	})
 
 	It("podman login and logout without registry parameter", func() {
-		registriesConf, err := ioutil.TempFile("", "TestLoginWithoutParameter")
-		Expect(err).To(BeNil())
+		registriesConf, err := os.CreateTemp("", "TestLoginWithoutParameter")
+		Expect(err).ToNot(HaveOccurred())
 		defer registriesConf.Close()
 		defer os.Remove(registriesConf.Name())
 
-		err = ioutil.WriteFile(registriesConf.Name(), registriesConfWithSearch, os.ModePerm)
-		Expect(err).To(BeNil())
+		err = os.WriteFile(registriesConf.Name(), registriesConfWithSearch, os.ModePerm)
+		Expect(err).ToNot(HaveOccurred())
 
 		// Environment is per-process, so this looks very unsafe; actually it seems fine because tests are not
 		// run in parallel unless they opt in by calling t.Parallel().  So don’t do that.
@@ -249,7 +248,7 @@ var _ = Describe("Podman login and logout", func() {
 			strings.Join([]string{authPath, "/auth:z"}, ":"), "-e", "REGISTRY_AUTH=htpasswd", "-e",
 			"REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm", "-e", "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
 			"-v", strings.Join([]string{certPath, "/certs:z"}, ":"), "-e", "REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt",
-			"-e", "REGISTRY_HTTP_TLS_KEY=/certs/domain.key", "registry:2.6"})
+			"-e", "REGISTRY_HTTP_TLS_KEY=/certs/domain.key", REGISTRY_IMAGE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -448,11 +447,11 @@ var _ = Describe("Podman login and logout", func() {
 	It("podman login and logout with repository push with invalid auth.json credentials", func() {
 		authFile := filepath.Join(podmanTest.TempDir, "auth.json")
 		// only `server` contains the correct login data
-		err := ioutil.WriteFile(authFile, []byte(fmt.Sprintf(`{"auths": {
+		err := os.WriteFile(authFile, []byte(fmt.Sprintf(`{"auths": {
 			"%s/podmantest": { "auth": "cG9kbWFudGVzdDp3cm9uZw==" },
 			"%s": { "auth": "cG9kbWFudGVzdDp0ZXN0" }
 		}}`, server, server)), 0644)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{
 			"push",
@@ -494,12 +493,12 @@ var _ = Describe("Podman login and logout", func() {
 		Expect(session).Should(Exit(0))
 
 		// only `server + /podmantest` and `server` have the correct login data
-		err := ioutil.WriteFile(authFile, []byte(fmt.Sprintf(`{"auths": {
+		err := os.WriteFile(authFile, []byte(fmt.Sprintf(`{"auths": {
 			"%s/podmantest/test-alpine": { "auth": "cG9kbWFudGVzdDp3cm9uZw==" },
 			"%s/podmantest": { "auth": "cG9kbWFudGVzdDp0ZXN0" },
 			"%s": { "auth": "cG9kbWFudGVzdDp0ZXN0" }
 		}}`, server, server, server)), 0644)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session = podmanTest.Podman([]string{
 			"pull",

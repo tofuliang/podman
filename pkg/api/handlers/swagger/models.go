@@ -1,4 +1,4 @@
-//nolint:deadcode,unused // these types are used to wire generated swagger to API code
+//nolint:unused // these types are used to wire generated swagger to API code
 package swagger
 
 import (
@@ -44,3 +44,7 @@ type networkDisconnectRequest types.NetworkDisconnect
 // Network connect
 // swagger:model
 type networkConnectRequestLibpod entities.NetworkConnectOptions
+
+// Network update
+// swagger:model
+type networkUpdateRequestLibpod entities.NetworkUpdateOptions

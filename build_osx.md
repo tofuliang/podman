@@ -6,7 +6,7 @@ The following describes the process for building the Podman client on macOS.
 Podman requires brew -- a package manager for macOS.  This will allow additional packages to be installed that are
 needed by Podman.  See the [brew project page](https://brew.sh/) for installation instructions.
 
-##Install build dependencies
+## Install build dependencies
 Podman requires some software from brew to be able to build.  This can be done using brew from a macOS terminal:
 
 ```
@@ -27,7 +27,7 @@ can now be built.
 
 ```
 $ cd go/src/github.com/containers/podman
-$ make podman-remote-darwin
+$ make podman-remote
 $ mv bin/darwin/podman bin/podman
 ```
 
@@ -38,7 +38,7 @@ $ ls -l bin/
 
 If you would like to build the docs associated with Podman on macOS:
 ```
-$ make install-podman-remote-darwin-docs
+$ make podman-remote-darwin-docs
 $ ls docs/build/remote/darwin
 ```
 

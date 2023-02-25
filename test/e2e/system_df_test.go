@@ -70,6 +70,17 @@ var _ = Describe("podman system df", func() {
 		Expect(containers[1]).To(Equal("2"), "total containers expected")
 		Expect(volumes[2]).To(Equal("2"), "total volumes expected")
 		Expect(volumes[6]).To(Equal("(50%)"), "percentage usage expected")
+
+		session = podmanTest.Podman([]string{"rm", "container1"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		session = podmanTest.Podman([]string{"system", "df"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		volumes = strings.Fields(session.OutputToStringArray()[3])
+		// percentages on volumes were being calculated incorrectly. Make sure we only report 100% and not above
+		Expect(volumes[6]).To(Equal("(100%)"), "percentage usage expected")
+
 	})
 
 	It("podman system df image with no tag", func() {
@@ -86,4 +97,43 @@ var _ = Describe("podman system df", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})
+
+	It("podman system df --format \"{{ json . }}\"", func() {
+		session := podmanTest.Podman([]string{"create", ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"system", "df", "--format", "{{ json . }}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(ContainSubstring("Size"))
+		Expect(session.OutputToString()).To(ContainSubstring("Reclaimable"))
+
+		// Note: {{ json . }} returns one json object per line, this matches docker!
+		for i, out := range session.OutputToStringArray() {
+			Expect(out).To(BeValidJSON(), "line %d failed to be parsed", i)
+		}
+
+	})
+
+	It("podman system df --format with --verbose", func() {
+		session := podmanTest.Podman([]string{"system", "df", "--format", "json", "--verbose"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).To(ExitWithError())
+		Expect(session.ErrorToString()).To(Equal("Error: cannot combine --format and --verbose flags"))
+	})
+
+	It("podman system df --format json", func() {
+		session := podmanTest.Podman([]string{"create", ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"system", "df", "--format", "json"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(ContainSubstring("Size"))
+		Expect(session.OutputToString()).To(ContainSubstring("Reclaimable"))
+		Expect(session.OutputToString()).To(BeValidJSON())
+	})
+
 })

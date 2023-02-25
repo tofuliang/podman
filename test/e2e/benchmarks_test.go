@@ -5,7 +5,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
@@ -99,7 +98,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 	}
 
 	totalMemoryInKb := func() (total uint64) {
-		files, err := ioutil.ReadDir(timedir)
+		files, err := os.ReadDir(timedir)
 		if err != nil {
 			Fail(fmt.Sprintf("Error reading timing dir: %v", err))
 		}
@@ -108,7 +107,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 			if f.IsDir() {
 				continue
 			}
-			raw, err := ioutil.ReadFile(path.Join(timedir, f.Name()))
+			raw, err := os.ReadFile(path.Join(timedir, f.Name()))
 			if err != nil {
 				Fail(fmt.Sprintf("Error reading timing file: %v", err))
 			}
@@ -132,7 +131,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 	Measure("Podman Benchmark Suite", func(b Benchmarker) {
 
 		registryOptions := &podmanRegistry.Options{
-			Image: "docker-archive:" + imageTarPath(registry),
+			Image: "docker-archive:" + imageTarPath(REGISTRY_IMAGE),
 		}
 
 		for i := range allBenchmarks {
@@ -179,7 +178,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 
 		newBenchmark("podman push", func() {
 			port, user, pass := getPortUserPass()
-			session := podmanTest.Podman([]string{"push", "--tls-verify=false", "--creds", user + ":" + pass, UBI_INIT, "localhost:" + port + "/repo/image:tag"})
+			session := podmanTest.Podman([]string{"push", "--tls-verify=false", "--creds", user + ":" + pass, SYSTEMD_IMAGE, "localhost:" + port + "/repo/image:tag"})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
 		}, &newBenchmarkOptions{needsRegistry: true})
@@ -193,7 +192,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 			needsRegistry: true,
 			init: func() {
 				port, user, pass := getPortUserPass()
-				session := podmanTest.Podman([]string{"push", "--tls-verify=false", "--creds", user + ":" + pass, UBI_INIT, "localhost:" + port + "/repo/image:tag"})
+				session := podmanTest.Podman([]string{"push", "--tls-verify=false", "--creds", user + ":" + pass, SYSTEMD_IMAGE, "localhost:" + port + "/repo/image:tag"})
 				session.WaitWithDefaultTimeout()
 				Expect(session).Should(Exit(0))
 			},
@@ -240,7 +239,7 @@ var _ = Describe("Podman Benchmark Suite", func() {
 		// --------------------------------------------------------------------------
 
 		newBenchmark("podman create", func() {
-			session := podmanTest.Podman([]string{"run", ALPINE, "true"})
+			session := podmanTest.Podman([]string{"create", ALPINE, "true"})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
 		}, nil)
@@ -259,6 +258,12 @@ var _ = Describe("Podman Benchmark Suite", func() {
 
 		newBenchmark("podman run", func() {
 			session := podmanTest.Podman([]string{"run", ALPINE, "true"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+		}, nil)
+
+		newBenchmark("podman run --detach", func() {
+			session := podmanTest.Podman([]string{"run", "--detach", ALPINE, "true"})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
 		}, nil)

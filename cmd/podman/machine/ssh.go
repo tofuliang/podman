@@ -4,22 +4,24 @@
 package machine
 
 import (
+	"fmt"
 	"net/url"
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/pkg/machine"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
 var (
 	sshCmd = &cobra.Command{
-		Use:   "ssh [options] [NAME] [COMMAND [ARG ...]]",
-		Short: "SSH into an existing machine",
-		Long:  "SSH into a managed virtual machine ",
-		RunE:  ssh,
+		Use:               "ssh [options] [NAME] [COMMAND [ARG ...]]",
+		Short:             "SSH into an existing machine",
+		Long:              "SSH into a managed virtual machine ",
+		PersistentPreRunE: rootlessOnly,
+		RunE:              ssh,
 		Example: `podman machine ssh myvm
   podman machine ssh myvm echo hello`,
 		ValidArgsFunction: autocompleteMachineSSH,
@@ -78,6 +80,11 @@ func ssh(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	vm, err = provider.LoadVMByName(vmName)
+	if err != nil {
+		return fmt.Errorf("vm %s not found: %w", vmName, err)
+	}
+
 	if !validVM && sshOpts.Username == "" {
 		sshOpts.Username, err = remoteConnectionUsername()
 		if err != nil {
@@ -85,11 +92,8 @@ func ssh(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	vm, err = provider.LoadVMByName(vmName)
-	if err != nil {
-		return errors.Wrapf(err, "vm %s not found", vmName)
-	}
-	return vm.SSH(vmName, sshOpts)
+	err = vm.SSH(vmName, sshOpts)
+	return utils.HandleOSExecError(err)
 }
 
 func remoteConnectionUsername() (string, error) {
@@ -97,7 +101,7 @@ func remoteConnectionUsername() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dest, _, err := cfg.ActiveDestination()
+	dest, _, _, err := cfg.ActiveDestination()
 	if err != nil {
 		return "", err
 	}

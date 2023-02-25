@@ -1,4 +1,4 @@
-![PODMAN logo](logo/podman-logo-source.svg)
+![PODMAN logo](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 
 # Troubleshooting
 
@@ -321,7 +321,7 @@ under `/var/lib/containers/storage`.
 # restorecon -R -v /srv/containers
 ```
 
-The semanage command above tells SELinux to setup the default labeling of
+The semanage command above tells SELinux to set up the default labeling of
 `/srv/containers` to match `/var/lib/containers`.  The `restorecon` command
 tells SELinux to apply the labels to the actual content.
 
@@ -387,7 +387,7 @@ error creating build container: Error committing the finished image: error addin
 
 #### Solution
 Choose one of the following:
-  * Setup containers/storage in a different directory, not on an NFS share.
+  * Set up containers/storage in a different directory, not on an NFS share.
     * Create a directory on a local file system.
     * Edit `~/.config/containers/containers.conf` and point the `volume_path` option to that local directory. (Copy `/usr/share/containers/containers.conf` if `~/.config/containers/containers.conf` does not exist)
   * Otherwise just run Podman as root, via `sudo podman`
@@ -409,7 +409,7 @@ Copying blob f7277927d38a done
 Copying config 5e13f8dd4c done
 Writing manifest to image destination
 Storing signatures
-Error: error creating build container: Error committing the finished image: error adding layer with blob "sha256:8d3eac894db4dc4154377ad28643dfe6625ff0e54bcfa63e0d04921f1a8ef7f8": Error processing tar file(exit status 1): operation not permitted
+Error: creating build container: Error committing the finished image: error adding layer with blob "sha256:8d3eac894db4dc4154377ad28643dfe6625ff0e54bcfa63e0d04921f1a8ef7f8": Error processing tar file(exit status 1): operation not permitted
 $ podman build .
 ERRO[0014] Error while applying layer: ApplyLayer exit status 1 stdout:  stderr: open /root/.bash_logout: permission denied
 error creating build container: Error committing the finished image: error adding layer with blob "sha256:a02a4930cb5d36f3290eb84f4bfa30668ef2e9fe3a1fb73ec015fc58b9958b17": ApplyLayer exit status 1 stdout:  stderr: open /root/.bash_logout: permission denied
@@ -536,7 +536,7 @@ same containers would survive the logout and continue running.
 #### Solution
 
 When systemd notes that a session that started a Podman container has exited,
-it will also stop any containers that has been associated with it.  To avoid
+it will also stop any containers that have been associated with it.  To avoid
 this, use the following command before logging out: `loginctl enable-linger`.
 To later revert the linger functionality, use `loginctl disable-linger`.
 
@@ -663,7 +663,7 @@ $ podman run --rm --rootfs /path/to/rootfs true
 
 The command above will create all the missing directories needed to run the container.
 
-After that, it can be used in read only mode, by multiple containers at the same time:
+After that, it can be used in read-only mode, by multiple containers at the same time:
 
 ```console
 $ podman run --read-only --rootfs /path/to/rootfs ....
@@ -678,23 +678,28 @@ $ podman run --rootfs /path/to/rootfs:O ....
 Modifications to the mount point are destroyed when the container
 finishes executing, similar to a tmpfs mount point being unmounted.
 
-### 26) Running containers with CPU limits fails with a permissions error
+### 26) Running containers with resource limits fails with a permissions error
 
-On some systemd-based systems, non-root users do not have CPU limit delegation
-permissions. This causes setting CPU limits to fail.
+On some systemd-based systems, non-root users do not have resource limit delegation
+permissions. This causes setting resource limits to fail.
 
 #### Symptom
 
-Running a container with a CPU limit options such as `--cpus`, `--cpu-period`,
-or `--cpu-quota` will fail with an error similar to the following:
+Running a container with a resource limit options will fail with an error similar to the following:
 
-    Error: opening file `cpu.max` for writing: Permission denied: OCI runtime permission denied error
+`--cpus`, `--cpu-period`, `--cpu-quota`, `--cpu-shares`:
 
-This means that CPU limit delegation is not enabled for the current user.
+    Error: OCI runtime error: crun: the requested cgroup controller `cpu` is not available
+
+`--cpuset-cpus`, `--cpuset-mems`:
+
+    Error: OCI runtime error: crun: the requested cgroup controller `cpuset` is not available
+
+This means that resource limit delegation is not enabled for the current user.
 
 #### Solution
 
-You can verify whether CPU limit delegation is enabled by running the following command:
+You can verify whether resource limit delegation is enabled by running the following command:
 
 ```console
 $ cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
@@ -704,27 +709,27 @@ Example output might be:
 
     memory pids
 
-In the above example, `cpu` is not listed, which means the current user does
-not have permission to set CPU limits.
+In the above example, `cpu` and `cpuset` are not listed, which means the current user does
+not have permission to set CPU or CPUSET limits.
 
-If you want to enable CPU limit delegation for all users, you can create the
+If you want to enable CPU or CPUSET limit delegation for all users, you can create the
 file `/etc/systemd/system/user@.service.d/delegate.conf` with the contents:
 
 ```ini
 [Service]
-Delegate=memory pids cpu io
+Delegate=memory pids cpu cpuset
 ```
 
-After logging out and logging back in, you should have permission to set CPU
-limits.
+After logging out and logging back in, you should have permission to set
+CPU and CPUSET limits.
 
-### 26) `exec container process '/bin/sh': Exec format error` (or another binary than `bin/sh`)
+### 27) `exec container process '/bin/sh': Exec format error` (or another binary than `bin/sh`)
 
 This can happen when running a container from an image for another architecture than the one you are running on.
 
 For example, if a remote repository only has, and thus send you, a `linux/arm64` _OS/ARCH_ but you run on `linux/amd64` (as happened in https://github.com/openMF/community-app/issues/3323 due to https://github.com/timbru31/docker-ruby-node/issues/564).
 
-### 27) `Error: failed to create sshClient: Connection to bastion host (ssh://user@host:22/run/user/.../podman/podman.sock) failed.: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain`
+### 28) `Error: failed to create sshClient: Connection to bastion host (ssh://user@host:22/run/user/.../podman/podman.sock) failed.: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain`
 
 In some situations where the client is not on the same machine as where the podman daemon is running the client key could be using a cipher not supported by the host. This indicates an issue with one's SSH config. Until remedied using podman over ssh
 with a pre-shared key will be impossible.
@@ -761,7 +766,7 @@ And now this should work:
 $ podman-remote info
 ```
 
-### 28) Rootless CNI networking fails in RHEL with Podman v2.2.1 to v3.0.1.
+### 29) Rootless CNI networking fails in RHEL with Podman v2.2.1 to v3.0.1.
 
 A failure is encountered when trying to use networking on a rootless
 container in Podman v2.2.1 through v3.0.1 on RHEL.  This error does not
@@ -780,7 +785,7 @@ instructions for building the Infra container image can be found for
 v2.2.1 [here](https://github.com/containers/podman/tree/v2.2.1-rhel/contrib/rootless-cni-infra),
 and for v3.0.1 [here](https://github.com/containers/podman/tree/v3.0.1-rhel/contrib/rootless-cni-infra).
 
-### 29) Container related firewall rules are lost after reloading firewalld
+### 30) Container related firewall rules are lost after reloading firewalld
 Container network can't be reached after `firewall-cmd --reload` and `systemctl restart firewalld` Running `podman network reload` will fix it but it has to be done manually.
 
 #### Symptom
@@ -918,7 +923,7 @@ if __name__ == "__main__":
     signal_listener()
 ```
 
-### 30) Podman run fails with `ERRO[0000] XDG_RUNTIME_DIR directory "/run/user/0" is not owned by the current user` or `Error: error creating tmpdir: mkdir /run/user/1000: permission denied`.
+### 31) Podman run fails with `ERRO[0000] XDG_RUNTIME_DIR directory "/run/user/0" is not owned by the current user` or `Error: creating tmpdir: mkdir /run/user/1000: permission denied`.
 
 A failure is encountered when performing `podman run` with a warning `XDG_RUNTIME_DIR is pointing to a path which is not writable. Most likely podman will fail.`
 
@@ -933,7 +938,7 @@ ERRO[0000] XDG_RUNTIME_DIR directory "/run/user/0" is not owned by the current u
 ```
 ```console
 # su - user1 -c 'podman images'
-Error: error creating tmpdir: mkdir /run/user/1000: permission denied
+Error: creating tmpdir: mkdir /run/user/1000: permission denied
 ```
 
 #### Solution
@@ -960,7 +965,7 @@ Alternatives:
 
 * Before invoking Podman command create a valid login session for your rootless user using `loginctl enable-linger <username>`
 
-### 31) 127.0.0.1:7777 port already bound
+### 32) 127.0.0.1:7777 port already bound
 
 After deleting a VM on macOS, the initialization of subsequent VMs fails.
 
@@ -972,7 +977,7 @@ After deleting a client VM on macOS via `podman machine stop` && `podman machine
 
 You will need to remove the hanging gv-proxy process bound to the port in question. For example, if the port mentioned in the error message is 127.0.0.1:7777, you can use the command `kill -9 $(lsof -i:7777)` in order to identify and remove the hanging process which prevents you from starting a new VM on that default port.
 
-### 32) The sshd process fails to run inside of the container.
+### 33) The sshd process fails to run inside of the container.
 
 #### Symptom
 
@@ -991,7 +996,7 @@ then using podman -remote to start the container or simply by running
 something like `systemd-run podman run ...`.  In this case the
 container will only need `CAP_AUDIT_WRITE`.
 
-### 33) Container creates a file that is not owned by the user's regular UID
+### 34) Container creates a file that is not owned by the user's regular UID
 
 After running a container with rootless Podman, the non-root user sees a numerical UID and GID instead of a username and groupname.
 
@@ -1028,8 +1033,8 @@ globbing, you need to wrap the command with `bash -c`, e.g.
 `podman unshare bash -c 'ls $HOME/dir1/a*'`.
 
 Would it have been possible to run Podman in another way so that your regular
-user would have become the owner of the file? Yes, you can use the options
-__--uidmap__ and __--gidmap__ to change how UIDs and GIDs are mapped
+user would have become the owner of the file? Yes, you can use the option
+`--userns keep-id:uid=$uid,gid=$gid` to change how UIDs and GIDs are mapped
 between the container and the host. Let's try it out.
 
 In the example above `ls -l` shows the UID 102002 and GID 102002. Set shell variables
@@ -1069,19 +1074,12 @@ or the `--user` option is not used.
 Run the container again but now with UIDs and GIDs mapped
 
 ```console
-$ subuidSize=$(( $(podman info --format "{{ range .Host.IDMappings.UIDMap }}+{{.Size }}{{end }}" ) - 1 ))
-$ subgidSize=$(( $(podman info --format "{{ range .Host.IDMappings.GIDMap }}+{{.Size }}{{end }}" ) - 1 ))
 $ mkdir dir1
 $ chmod 777 dir1
 $ podman run --rm
   -v ./dir1:/dir1:Z \
   --user $uid:$gid \
-  --uidmap $uid:0:1 \
-  --uidmap 0:1:$uid \
-  --uidmap $(($uid+1)):$(($uid+1)):$(($subuidSize-$uid)) \
-  --gidmap $gid:0:1 \
-  --gidmap 0:1:$gid \
-  --gidmap $(($gid+1)):$(($gid+1)):$(($subgidSize-$gid)) \
+  --userns keep-id:uid=$uid,gid=$gid \
      docker.io/library/ubuntu bash -c "touch /dir1/a; chmod 600 /dir1/a"
 $ id -u
 tester
@@ -1106,7 +1104,11 @@ Another variant of the same problem could occur when using
 in some way (e.g by creating them themselves, or switching the effective UID to
 a rootless user and then creates files).
 
-### 34) Passed-in devices or files can't be accessed in rootless container (UID/GID mapping problem)
+See also the troubleshooting tip:
+
+[_Podman run fails with "Error: unrecognized namespace mode keep-id:uid=1000,gid=1000 passed"_](#39-podman-run-fails-with-error-unrecognized-namespace-mode-keep-iduid1000gid1000-passed)
+
+### 35) Passed-in devices or files can't be accessed in rootless container (UID/GID mapping problem)
 
 As a non-root user you have access rights to devices, files and directories that you
 want to pass into a rootless container with `--device=...`, `--volume=...` or `--mount=..`.
@@ -1136,7 +1138,7 @@ ls: cannot open directory '/dir1': Permission denied
 We follow essentially the same solution as in the previous
 troubleshooting tip:
 
-    Container creates a file that is not owned by the regular UID
+[_Container creates a file that is not owned by the user's regular UID_](#34-container-creates-a-file-that-is-not-owned-by-the-users-regular-uid)
 
 but for this problem the container UID and GID can't be as
 easily computed by mere addition and subtraction.
@@ -1183,27 +1185,19 @@ and run
 $ mkdir dir1
 $ echo hello > dir1/file.txt
 $ chmod 700 dir1/file.txt
-$ subuidSize=$(( $(podman info --format "{{ range .Host.IDMappings.UIDMap }}+{{.Size }}{{end }}" ) - 1 ))
-$ subgidSize=$(( $(podman info --format "{{ range .Host.IDMappings.GIDMap }}+{{.Size }}{{end }}" ) - 1 ))
 $ podman run --rm \
   -v ./dir1:/dir1:Z \
   --user $uid:$gid \
-  --uidmap $uid:0:1 \
-  --uidmap 0:1:$uid \
-  --uidmap $(($uid+1)):$(($uid+1)):$(($subuidSize-$uid)) \
-  --gidmap $gid:0:1 \
-  --gidmap 0:1:$gid \
-  --gidmap $(($gid+1)):$(($gid+1)):$(($subgidSize-$gid)) \
+  --userns keep-id:uid=$uid,gid=$gid \
   docker.io/library/alpine cat /dir1/file.txt
 hello
 ```
 
-A side-note: Using [__--userns=keep-id__](https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode)
-can sometimes be an alternative solution, but it forces the regular
-user's host UID to be mapped to the same UID inside the container
-so it provides less flexibility than using `--uidmap` and `--gidmap`.
+See also the troubleshooting tip:
 
-### 35) Images in the additional stores can be deleted even if there are containers using them
+[_Podman run fails with "Error: unrecognized namespace mode keep-id:uid=1000,gid=1000 passed"_](#39-podman-run-fails-with-error-unrecognized-namespace-mode-keep-iduid1000gid1000-passed)
+
+### 36) Images in the additional stores can be deleted even if there are containers using them
 
 When an image in an additional store is used, it is not locked thus it
 can be deleted even if there are containers using it.
@@ -1218,7 +1212,7 @@ It is the user responsibility to make sure images in an additional
 store are not deleted while being used by containers in another
 store.
 
-### 36) Syncing bugfixes for podman-remote or setups using Podman API
+### 37) Syncing bugfixes for podman-remote or setups using Podman API
 
 After upgrading Podman to a newer version an issue with the earlier version of Podman still presents itself while using podman-remote.
 
@@ -1230,4 +1224,123 @@ While running podman remote commands with the most updated Podman, issues that w
 
 When upgrading Podman to a particular version for the required fixes, users often make the mistake of only upgrading the Podman client. However, suppose a setup uses `podman-remote` or uses a client that communicates with the Podman server on a remote machine via the REST API. In that case, it is required to upgrade both the Podman client and the Podman server running on the remote machine. Both the Podman client and server must be upgraded to the same version.
 
-Example: If a particular bug was fixed in `v4.1.0` then The Podman client` must have version `v4.1.0` as well the Podman server must have version `v4.1.0`.
+Example: If a particular bug was fixed in `v4.1.0` then the Podman client must have version `v4.1.0` as well the Podman server must have version `v4.1.0`.
+
+### 38) Unexpected carriage returns are outputted on the terminal
+
+When using the __--tty__ (__-t__) flag, unexpected carriage returns are outputted on the terminal.
+
+#### Symptom
+
+The container program prints a newline (`\n`) but the terminal outputs a carriage return and a newline (`\r\n`).
+
+```
+$ podman run --rm -t fedora echo abc | od -c
+0000000   a   b   c  \r  \n
+0000005
+```
+
+When run directly on the host, the result is as expected.
+
+```
+$ echo abc | od -c
+0000000   a   b   c  \n
+0000004
+```
+
+Extra carriage returns can also shift the prompt to the right.
+
+```
+$ podman run --rm -t fedora sh -c "echo 1; echo 2; echo 3" | cat -A
+1^M$
+    2^M$
+        3^M$
+            $
+```
+
+#### Solution
+
+Run Podman without the __--tty__ (__-t__) flag.
+
+```
+$ podman run --rm fedora echo abc | od -c
+0000000   a   b   c  \n
+0000004
+```
+
+The __--tty__ (__-t__) flag should only be used when the program requires user interaction in the termainal, for instance expecting
+the user to type an answer to a question.
+
+Where does the extra carriage return `\r` come from?
+
+The extra `\r` is not outputted by Podman but by the terminal. In fact, a reconfiguration of the terminal can make the extra `\r` go away.
+
+```
+$ podman run --rm -t fedora /bin/sh -c "stty -onlcr && echo abc" | od -c
+0000000   a   b   c  \n
+0000004
+```
+
+### 39) Podman run fails with "Error: unrecognized namespace mode keep-id:uid=1000,gid=1000 passed"
+
+Podman 4.3.0 introduced the options _uid_ and _gid_ that can be given to `--userns keep-id` which are not recognized by older versions of Podman.
+
+#### Symptom
+
+When using a Podman version older than 4.3.0, the options _uid_ and _gid_ are not recognized, and an "unrecognized namespace mode" error is raised.
+
+```
+$ uid=1000
+$ gid=1000
+$ podman run --rm
+  --user $uid:$gid \
+  --userns keep-id:uid=$uid,gid=$gid \
+     docker.io/library/ubuntu /bin/cat /proc/self/uid_map
+Error: unrecognized namespace mode keep-id:uid=1000,gid=1000 passed
+$
+```
+
+#### Solution
+
+Use __--uidmap__ and __--gidmap__ options to describe the same UID and GID mapping.
+
+Run
+
+```
+$ uid=1000
+$ gid=1000
+$ subuidSize=$(( $(podman info --format "{{ range \
+   .Host.IDMappings.UIDMap }}+{{.Size }}{{end }}" ) - 1 ))
+$ subgidSize=$(( $(podman info --format "{{ range \
+   .Host.IDMappings.GIDMap }}+{{.Size }}{{end }}" ) - 1 ))
+$ podman run --rm \
+  --user $uid:$gid \
+  --uidmap 0:1:$uid \
+  --uidmap $uid:0:1 \
+  --uidmap $(($uid+1)):$(($uid+1)):$(($subuidSize-$uid)) \
+  --gidmap 0:1:$gid \
+  --gidmap $gid:0:1 \
+  --gidmap $(($gid+1)):$(($gid+1)):$(($subgidSize-$gid)) \
+     docker.io/library/ubuntu /bin/cat /proc/self/uid_map
+         0          1       1000
+      1000          0          1
+      1001       1001      64536
+```
+
+which uses the same UID and GID mapping as when specifying
+`--userns keep-id:uid=$uid,gid=$gid` with Podman 4.3.0 (or greater)
+
+```
+$ uid=1000
+$ gid=1000
+$ podman run --rm \
+  --user $uid:$gid \
+  --userns keep-id:uid=$uid,gid=$gid \
+     docker.io/library/ubuntu /bin/cat /proc/self/uid_map
+         0          1       1000
+      1000          0          1
+      1001       1001      64536
+```
+
+Replace `/bin/cat /proc/self/uid_map` with
+`/bin/cat /proc/self/gid_map` to show the GID mapping.

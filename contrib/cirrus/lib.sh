@@ -64,7 +64,7 @@ SCRIPT_BASE=${SCRIPT_BASE:-./contrib/cirrus}
 PACKAGE_DOWNLOAD_DIR=/var/cache/download
 
 # Log remote-client system test server output here
-PODMAN_SERVER_LOG=$CIRRUS_WORKING_DIR/server.log
+PODMAN_SERVER_LOG=$CIRRUS_WORKING_DIR/podman-server.log
 
 # Defaults when not running under CI
 export CI="${CI:-false}"
@@ -74,7 +74,7 @@ CIRRUS_REPO_NAME=${CIRRUS_REPO_NAME:-podman}
 # Cirrus only sets $CIRRUS_BASE_SHA properly for PRs, but $EPOCH_TEST_COMMIT
 # needs to be set from this value in order for `make validate` to run properly.
 # When running get_ci_vm.sh, most $CIRRUS_xyz variables are empty. Attempt
-# to accomidate both branch and get_ci_vm.sh testing by discovering the base
+# to accommodate both branch and get_ci_vm.sh testing by discovering the base
 # branch SHA value.
 # shellcheck disable=SC2154
 if [[ -z "$CIRRUS_BASE_SHA" ]] && [[ -z "$CIRRUS_TAG" ]]
@@ -91,9 +91,21 @@ EPOCH_TEST_COMMIT="$CIRRUS_BASE_SHA"
 # testing operations on all platforms and versions.  This is necessary
 # to avoid needlessly passing through global/system values across
 # contexts, such as host->container or root->rootless user
-PASSTHROUGH_ENV_RE='(^CI.*)|(^CIRRUS)|(^DISTRO_NV)|(^GOPATH)|(^GOCACHE)|(^GOSRC)|(^SCRIPT_BASE)|(CGROUP_MANAGER)|(OCI_RUNTIME)|(^TEST.*)|(^PODBIN_NAME)|(^PRIV_NAME)|(^ALT_NAME)|(^ROOTLESS_USER)|(SKIP_USERNS)|(.*_NAME)|(.*_FQIN)|(NETWORK_BACKEND)|(DEST_BRANCH)'
+#
+# List of envariables which must be EXACT matches
+PASSTHROUGH_ENV_EXACT='CGROUP_MANAGER|DEST_BRANCH|DISTRO_NV|GOCACHE|GOPATH|GOSRC|NETWORK_BACKEND|OCI_RUNTIME|ROOTLESS_USER|SCRIPT_BASE|SKIP_USERNS|EC2_INST_TYPE'
+
+# List of envariable patterns which must match AT THE BEGINNING of the name.
+PASSTHROUGH_ENV_ATSTART='CI|TEST'
+
+# List of envariable patterns which can match ANYWHERE in the name
+PASSTHROUGH_ENV_ANYWHERE='_NAME|_FQIN'
+
+# Combine into one
+PASSTHROUGH_ENV_RE="(^($PASSTHROUGH_ENV_EXACT)\$)|(^($PASSTHROUGH_ENV_ATSTART))|($PASSTHROUGH_ENV_ANYWHERE)"
+
 # Unsafe env. vars for display
-SECRET_ENV_RE='(ACCOUNT)|(GC[EP]..+)|(SSH)|(PASSWORD)|(TOKEN)'
+SECRET_ENV_RE='ACCOUNT|GC[EP]..|SSH|PASSWORD|SECRET|TOKEN'
 
 # Type of filesystem used for cgroups
 CG_FS_TYPE="$(stat -f -c %T /sys/fs/cgroup)"
@@ -107,34 +119,25 @@ set +a
 lilto() { err_retry 8 1000 "" "$@"; }  # just over 4 minutes max
 bigto() { err_retry 7 5670 "" "$@"; }  # 12 minutes max
 
-# Print shell-escaped variable=value pairs, one per line, based on
-# variable name matching a regex.  This is intended to catch
-# variables being passed down from higher layers, like Cirrus-CI.
+# Return a list of environment variables that should be passed through
+# to lower levels (tests in containers, or via ssh to rootless).
+# We return the variable names only, not their values. It is up to our
+# caller to reference values.
 passthrough_envars(){
-    local xchars
     local envname
-    local envval
-    # Avoid values containing entirely punctuation|control|whitespace
-    xchars='[:punct:][:cntrl:][:space:]'
     warn "Will pass env. vars. matching the following regex:
     $PASSTHROUGH_ENV_RE"
-    for envname in $(awk 'BEGIN{for(v in ENVIRON) print v}' | \
-                         grep -Ev "SETUP_ENVIRONMENT" | \
-                         grep -Ev "$SECRET_ENV_RE" | \
-                         grep -E "$PASSTHROUGH_ENV_RE"); do
-
-            envval="${!envname}"
-            [[ -n $(tr -d "$xchars" <<<"$envval") ]] || continue
-
-            # Properly escape values to prevent injection
-            printf -- "$envname=%q\n" "$envval"
-    done
+    compgen -A variable | \
+        grep -Ev "SETUP_ENVIRONMENT" | \
+        grep -Ev "$SECRET_ENV_RE" | \
+        grep -E  "$PASSTHROUGH_ENV_RE"
 }
 
 setup_rootless() {
     req_env_vars GOPATH GOSRC SECRET_ENV_RE
 
     ROOTLESS_USER="${ROOTLESS_USER:-some${RANDOM}dude}"
+    ROOTLESS_UID=""
 
     local rootless_uid
     local rootless_gid
@@ -157,8 +160,9 @@ setup_rootless() {
     msg "************************************************************"
     cd $GOSRC || exit 1
     # Guarantee independence from specific values
-    rootless_uid=$[RANDOM+1000]
-    rootless_gid=$[RANDOM+1000]
+    rootless_uid=$((1500 + RANDOM % 5000))
+    ROOTLESS_UID=$rootless_uid
+    rootless_gid=$((1500 + RANDOM % 5000))
     msg "creating $rootless_uid:$rootless_gid $ROOTLESS_USER user"
     groupadd -g $rootless_gid $ROOTLESS_USER
     useradd -g $rootless_gid -u $rootless_uid --no-user-group --create-home $ROOTLESS_USER
@@ -173,7 +177,7 @@ setup_rootless() {
     ssh-keygen -t ed25519 -P "" -f "/home/$ROOTLESS_USER/.ssh/id_ed25519"
     ssh-keygen -t rsa -P "" -f "/home/$ROOTLESS_USER/.ssh/id_rsa"
 
-    msg "Setup authorized_keys"
+    msg "Set up authorized_keys"
     cat $HOME/.ssh/*.pub /home/$ROOTLESS_USER/.ssh/*.pub >> $HOME/.ssh/authorized_keys
     cat $HOME/.ssh/*.pub /home/$ROOTLESS_USER/.ssh/*.pub >> /home/$ROOTLESS_USER/.ssh/authorized_keys
 
@@ -186,9 +190,9 @@ setup_rootless() {
     # never be any non-localhost connections made from tests (using strict-mode).
     # If there are, it's either a security problem or a broken test, both of which
     # we want to lead to test failures.
-    msg "   setup known_hosts for $USER"
+    msg "   set up known_hosts for $USER"
     ssh-keyscan localhost > /root/.ssh/known_hosts
-    msg "   setup known_hosts for $ROOTLESS_USER"
+    msg "   set up known_hosts for $ROOTLESS_USER"
     # Maintain access-permission consistency with all other .ssh files.
     install -Z -m 700 -o $ROOTLESS_USER -g $ROOTLESS_USER \
         /root/.ssh/known_hosts /home/$ROOTLESS_USER/.ssh/known_hosts
@@ -200,12 +204,34 @@ install_test_configs() {
 }
 
 use_cni() {
+    req_env_vars OS_RELEASE_ID PACKAGE_DOWNLOAD_DIR SCRIPT_BASE
+    # Defined by common automation library
+    # shellcheck disable=SC2154
+    if [[ "$OS_RELEASE_ID" =~ "debian" ]]; then
+        # Supporting it involves swapping the rpm & dnf commands below
+        die "Testing debian w/ CNI networking currently not supported"
+    fi
+
     msg "Unsetting NETWORK_BACKEND for all subsequent environments."
     echo "export -n NETWORK_BACKEND" >> /etc/ci_environment
     echo "unset NETWORK_BACKEND" >> /etc/ci_environment
     export -n NETWORK_BACKEND
     unset NETWORK_BACKEND
+    # While it's possible a user may want both installed, for CNI CI testing
+    # purposes we only care about backward-compatibility, not forward.
+    # If both CNI & netavark are present, in some situations where --root
+    # is used it's possible for podman to pick the "wrong" networking stack.
+    msg "Force-removing netavark and aardvark-dns"
+    # Other packages depend on nv/av, but we're testing with podman
+    # binaries built from source, so it's safe to ignore these deps.
+    #
+    # Do not fail when netavark and aardvark-dns are not installed.
+    for pkg in aardvark-dns netavark
+    do
+        [ -z "$(rpm -qa | grep $pkg)" ] && echo "$pkg not installed" || rpm -e --nodeps $pkg
+    done
     msg "Installing default CNI configuration"
+    dnf install -y $PACKAGE_DOWNLOAD_DIR/podman-plugins*
     cd $GOSRC || exit 1
     rm -rvf /etc/cni/net.d
     mkdir -p /etc/cni/net.d
@@ -220,11 +246,49 @@ use_cni() {
 }
 
 use_netavark() {
+    req_env_vars OS_RELEASE_ID PRIOR_FEDORA_NAME DISTRO_NV
+    local magickind repokind
     msg "Forcing NETWORK_BACKEND=netavark for all subsequent environments."
     echo "NETWORK_BACKEND=netavark" >> /etc/ci_environment
     export NETWORK_BACKEND=netavark  # needed for install_test_configs()
     msg "Removing any/all CNI configuration"
     rm -rvf /etc/cni/net.d/*
+    # N/B: The CNI packages are still installed and available. This is
+    # on purpose, since CI needs to verify the selection mechanisms are
+    # functional when both are available.
+
+    # See ./contrib/cirrus/CIModes.md.
+    # Vars defined by cirrus-ci
+    # shellcheck disable=SC2154
+    if [[ ! "$OS_RELEASE_ID" =~ "debian" ]] && \
+       [[ "$CIRRUS_CHANGE_TITLE" =~ CI:[AN]V[AN]V= ]]
+    then
+        # shellcheck disable=SC2154
+        if [[ "$CIRRUS_PR_DRAFT" != "true" ]]; then
+            die "Magic 'CI:NVAV=*' string can only be used on DRAFT PRs"
+        fi
+
+        magickind=$(sed -r -e 's~(.*CI:[AN]V[AN]V=)(\w+)(.*)~\2~' <<<"$CIRRUS_CHANGE_TITLE")
+
+        # The update source scheme is defined during VM image build.
+        # See c/automation_images repo. cache_images/fedora_packaging.sh
+        repokind="updates-testing"  # $DISTRO_NV==$FEDORA_NAME
+        # shellcheck disable=SC2154
+        if [[ "$DISTRO_NV" =~ $PRIOR_FEDORA_NAME ]]; then
+            repokind="updates"
+        # else we're not running fedora, or .cirrus.yml env. vars are setup wrong.
+        fi
+
+        if [[ "$magickind" == "update" ]]; then
+            warn "Updating netavark/aardvark RPM packages from ***the fedora $repokind repo.***"
+        elif [[ "$magickind" == "main" ]]; then
+            warn "Installing latest netavark/aardvark packages from their main branches using ***the podman-next COPR repo***"
+            showrun dnf copr enable rhcontainerbot/podman-next -y
+        else
+            die "Unknown CI:NVAV= '$magickind' keyword.  Only 'update' and 'main' are supported."
+        fi
+        showrun dnf upgrade -y netavark aardvark-dns
+    fi
 }
 
 # Remove all files provided by the distro version of podman.
@@ -253,7 +317,7 @@ remove_packaged_podman_files() {
 
     # OS_RELEASE_ID is defined by automation-library
     # shellcheck disable=SC2154
-    if [[ "$OS_RELEASE_ID" =~ "ubuntu" ]]
+    if [[ "$OS_RELEASE_ID" =~ "debian" ]]
     then
         LISTING_CMD="dpkg-query -L podman"
     else
@@ -270,4 +334,38 @@ remove_packaged_podman_files() {
 
     # Be super extra sure and careful vs performant and completely safe
     sync && echo 3 > /proc/sys/vm/drop_caches || true
+}
+
+# Execute make localbenchmarks in $CIRRUS_WORKING_DIR/data
+# for preserving as a task artifact.
+localbenchmarks() {
+    local datadir envnames envname
+    req_env_vars DISTRO_NV PODBIN_NAME PRIV_NAME TEST_ENVIRON TEST_FLAVOR
+    req_env_vars VM_IMAGE_NAME EC2_INST_TYPE
+
+    datadir=$CIRRUS_WORKING_DIR/data
+    mkdir -p $datadir
+
+    envnames=$(passthrough_envars | sort);
+    (
+      echo "# Env. var basis for benchmarks benchmarks."
+      for envname in $envnames; do
+        printf "$envname=%q\n" "${!envname}"
+      done
+
+      echo "# Machine details for data-comparison sake, not actual env. vars."
+      # Checked above in req_env_vars
+      # shellcheck disable=SC2154
+      echo "\
+BENCH_ENV_VER=1
+CPUTOTAL=$(grep -ce '^processor' /proc/cpuinfo)
+INST_TYPE=$EC2_INST_TYPE
+MEMTOTALKB=$(awk -F: '$1 == "MemTotal" { print $2 }' </proc/meminfo | sed -e "s/^ *//" | cut -d ' ' -f 1)
+UNAME_R=$(uname -r)
+UNAME_M=$(uname -m)
+"
+    ) > $datadir/benchmarks.env
+    make localbenchmarks | tee $datadir/benchmarks.raw
+    msg "Processing raw benchmarks output"
+    hack/parse-localbenchmarks < $datadir/benchmarks.raw | tee $datadir/benchmarks.csv
 }

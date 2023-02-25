@@ -1,4 +1,4 @@
-![PODMAN logo](../logo/podman-logo-source.svg)
+![PODMAN logo](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 # Test utils
 Test utils provide common functions and structs for testing. It includes two structs:
 * `PodmanTest`: Handle the *podman* command and other global resources like temporary
@@ -63,7 +63,7 @@ output with given format JSON by using *structs* defined in inspect package.
 You can run the entire suite of integration tests with the following command:
 
 ```
-GOPATH=~/go ginkgo -v test/e2e/.
+GOPATH=~/go ginkgo -tags "remote" -v test/e2e/.
 ```
 
 Note the trailing period on the command above. Also, **-v** invokes verbose mode.  That
@@ -76,6 +76,8 @@ You can run a single file of integration tests using the go test command:
 ```
 GOPATH=~/go go test -v test/e2e/libpod_suite_test.go test/e2e/common_test.go test/e2e/config.go test/e2e/config_amd64.go test/e2e/your_test.go
 ```
+
+If you want to run the tests with the podman-remote client, make sure to replace `test/e2e/libpod_suite_test.go` with `test/e2e/libpod_suite_remote_test.go`.
 
 ### Running a single integration test
 Before running the test suite, you have to declare which test you want run in the test
@@ -133,11 +135,24 @@ Make sure that `bats` binary (`bin/bats` in the repository) is in your `PATH`, i
 PATH=$PATH:~/tools/bats/bin
 ```
 
+System tests also rely on `jq`, `socat`, `nmap`, and other tools. For a
+comprehensive list, see the `%package tests` section in the
+[fedora specfile](https://src.fedoraproject.org/rpms/podman/blob/main/f/podman.spec).
+
 ## Running system tests
 When `bats` is installed and is in your `PATH`, you can run the test suite with following command:
 
 ```
 make localsystem
+```
+
+## Running the system tests in a more controlled way
+If you would like to run a subset of the system tests, or configure the environment (e.g. root vs rootless, local vs remote),
+use `hack/bats`.
+
+For usage run:
+```
+hack/bats --help
 ```
 
 ## Contributing to system tests

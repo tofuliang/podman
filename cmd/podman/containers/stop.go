@@ -3,7 +3,7 @@ package containers
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
@@ -12,7 +12,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -50,8 +49,11 @@ var (
 )
 
 var (
-	stopOptions = entities.StopOptions{}
-	stopTimeout uint
+	stopOptions = entities.StopOptions{
+		Filters: make(map[string][]string),
+	}
+	stopCidFiles = []string{}
+	stopTimeout  uint
 )
 
 func stopFlags(cmd *cobra.Command) {
@@ -61,12 +63,16 @@ func stopFlags(cmd *cobra.Command) {
 	flags.BoolVarP(&stopOptions.Ignore, "ignore", "i", false, "Ignore errors when a specified container is missing")
 
 	cidfileFlagName := "cidfile"
-	flags.StringArrayVar(&cidFiles, cidfileFlagName, nil, "Read the container ID from the file")
+	flags.StringArrayVar(&stopCidFiles, cidfileFlagName, nil, "Read the container ID from the file")
 	_ = cmd.RegisterFlagCompletionFunc(cidfileFlagName, completion.AutocompleteDefault)
 
 	timeFlagName := "time"
 	flags.UintVarP(&stopTimeout, timeFlagName, "t", containerConfig.Engine.StopTimeout, "Seconds to wait for stop before killing the container")
 	_ = cmd.RegisterFlagCompletionFunc(timeFlagName, completion.AutocompleteNone)
+
+	filterFlagName := "filter"
+	flags.StringSliceVarP(&filters, filterFlagName, "f", []string{}, "Filter output based on conditions given")
+	_ = cmd.RegisterFlagCompletionFunc(filterFlagName, common.AutocompletePsFilters)
 
 	if registry.IsRemote() {
 		_ = flags.MarkHidden("cidfile")
@@ -95,17 +101,26 @@ func stop(cmd *cobra.Command, args []string) error {
 	var (
 		errs utils.OutputErrors
 	)
+	args = utils.RemoveSlash(args)
+
 	if cmd.Flag("time").Changed {
 		stopOptions.Timeout = &stopTimeout
 	}
-
-	for _, cidFile := range cidFiles {
-		content, err := ioutil.ReadFile(cidFile)
+	for _, cidFile := range stopCidFiles {
+		content, err := os.ReadFile(cidFile)
 		if err != nil {
-			return errors.Wrap(err, "error reading CIDFile")
+			return fmt.Errorf("reading CIDFile: %w", err)
 		}
 		id := strings.Split(string(content), "\n")[0]
 		args = append(args, id)
+	}
+
+	for _, f := range filters {
+		split := strings.SplitN(f, "=", 2)
+		if len(split) < 2 {
+			return fmt.Errorf("invalid filter %q", f)
+		}
+		stopOptions.Filters[split[0]] = append(stopOptions.Filters[split[0]], split[1])
 	}
 
 	responses, err := registry.ContainerEngine().ContainerStop(context.Background(), args, stopOptions)
@@ -113,10 +128,13 @@ func stop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	for _, r := range responses {
-		if r.Err == nil {
-			fmt.Println(r.RawInput)
-		} else {
+		switch {
+		case r.Err != nil:
 			errs = append(errs, r.Err)
+		case r.RawInput != "":
+			fmt.Println(r.RawInput)
+		default:
+			fmt.Println(r.Id)
 		}
 	}
 	return errs.PrintErrors()

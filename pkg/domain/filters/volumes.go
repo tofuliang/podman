@@ -1,12 +1,14 @@
 package filters
 
 import (
+	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
+	pruneFilters "github.com/containers/common/pkg/filters"
 	"github.com/containers/podman/v4/libpod"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/pkg/errors"
 )
 
 func GenerateVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, error) {
@@ -15,9 +17,12 @@ func GenerateVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, error) {
 		for _, val := range v {
 			switch filter {
 			case "name":
-				nameVal := val
+				nameRegexp, err := regexp.Compile(val)
+				if err != nil {
+					return nil, err
+				}
 				vf = append(vf, func(v *libpod.Volume) bool {
-					return nameVal == v.Name()
+					return nameRegexp.MatchString(v.Name())
 				})
 			case "driver":
 				driverVal := val
@@ -32,7 +37,12 @@ func GenerateVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, error) {
 			case "label":
 				filter := val
 				vf = append(vf, func(v *libpod.Volume) bool {
-					return util.MatchLabelFilters([]string{filter}, v.Labels())
+					return pruneFilters.MatchLabelFilters([]string{filter}, v.Labels())
+				})
+			case "label!":
+				filter := val
+				vf = append(vf, func(v *libpod.Volume) bool {
+					return !pruneFilters.MatchLabelFilters([]string{filter}, v.Labels())
 				})
 			case "opt":
 				filterArray := strings.SplitN(val, "=", 2)
@@ -68,7 +78,7 @@ func GenerateVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, error) {
 					// invert the result of IsDangling.
 					invert = true
 				default:
-					return nil, errors.Errorf("%q is not a valid value for the \"dangling\" filter - must be true or false", danglingVal)
+					return nil, fmt.Errorf("%q is not a valid value for the \"dangling\" filter - must be true or false", danglingVal)
 				}
 				vf = append(vf, func(v *libpod.Volume) bool {
 					dangling, err := v.IsDangling()
@@ -81,7 +91,7 @@ func GenerateVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, error) {
 					return dangling
 				})
 			default:
-				return nil, errors.Errorf("%q is an invalid volume filter", filter)
+				return nil, fmt.Errorf("%q is an invalid volume filter", filter)
 			}
 		}
 	}
@@ -96,7 +106,12 @@ func GeneratePruneVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, erro
 			switch filter {
 			case "label":
 				vf = append(vf, func(v *libpod.Volume) bool {
-					return util.MatchLabelFilters([]string{filterVal}, v.Labels())
+					return pruneFilters.MatchLabelFilters([]string{filterVal}, v.Labels())
+				})
+			case "label!":
+				filter := val
+				vf = append(vf, func(v *libpod.Volume) bool {
+					return !pruneFilters.MatchLabelFilters([]string{filter}, v.Labels())
 				})
 			case "until":
 				f, err := createUntilFilterVolumeFunction(filterVal)
@@ -105,7 +120,7 @@ func GeneratePruneVolumeFilters(filters url.Values) ([]libpod.VolumeFilter, erro
 				}
 				vf = append(vf, f)
 			default:
-				return nil, errors.Errorf("%q is an invalid volume filter", filter)
+				return nil, fmt.Errorf("%q is an invalid volume filter", filter)
 			}
 		}
 	}

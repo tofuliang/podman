@@ -7,6 +7,7 @@
 load helpers
 
 @test "podman container storage is not accessible by unprivileged users" {
+    skip_if_cgroupsv1 "FIXME: #15025: run --uidmap fails on cgroups v1"
     skip_if_rootless "test meaningless without suid"
     skip_if_remote
 
@@ -96,6 +97,7 @@ EOF
     run_podman rm c_mount
 
     run_podman rm c_uidmap c_uidmap_v
+    run_podman volume rm foo
 }
 
 
@@ -118,7 +120,7 @@ EOF
 
     # Some of the above may not exist on our host. Find only the ones that do.
     local -a subset=()
-    for mp in ${mps[@]}; do
+    for mp in "${mps[@]}"; do
         if [ -e $mp ]; then
             subset+=($mp)
         fi
@@ -127,7 +129,7 @@ EOF
     # Run 'stat' on all the files, plus /dev/null. Get path, file type,
     # number of links, major, and minor (see below for why). Do it all
     # in one go, to avoid multiple podman-runs
-    run_podman '?' run --rm $IMAGE stat -c'%n:%F:%h:%T:%t' /dev/null ${subset[@]}
+    run_podman '?' run --rm $IMAGE stat -c'%n:%F:%h:%T:%t' /dev/null "${subset[@]}"
     assert $status -le 1 "stat exit status: expected 0 or 1"
 
     local devnull=

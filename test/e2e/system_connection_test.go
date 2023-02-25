@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,7 +26,7 @@ var _ = Describe("podman system connection", func() {
 
 	BeforeEach(func() {
 		ConfPath.Value, ConfPath.IsSet = os.LookupEnv("CONTAINERS_CONF")
-		conf, err := ioutil.TempFile("", "containersconf")
+		conf, err := os.CreateTemp("", "containersconf")
 		Expect(err).ToNot(HaveOccurred())
 		os.Setenv("CONTAINERS_CONF", conf.Name())
 
@@ -47,9 +46,7 @@ var _ = Describe("podman system connection", func() {
 		}
 
 		f := CurrentGinkgoTestDescription()
-		_, _ = GinkgoWriter.Write(
-			[]byte(
-				fmt.Sprintf("Test: %s completed in %f seconds", f.TestText, f.Duration.Seconds())))
+		processTestResult(f)
 	})
 
 	Context("without running API service", func() {
@@ -58,7 +55,7 @@ var _ = Describe("podman system connection", func() {
 				"--default",
 				"--identity", "~/.ssh/id_rsa",
 				"QA",
-				"ssh://root@server.fubar.com:2222/run/podman/podman.sock",
+				"ssh://root@podman.test:2222/run/podman/podman.sock",
 			}
 			session := podmanTest.Podman(cmd)
 			session.WaitWithDefaultTimeout()
@@ -67,10 +64,10 @@ var _ = Describe("podman system connection", func() {
 
 			cfg, err := config.ReadCustomConfig()
 			Expect(err).ShouldNot(HaveOccurred())
-			Expect(cfg).To(HaveActiveService("QA"))
+			Expect(cfg).Should(HaveActiveService("QA"))
 			Expect(cfg).Should(VerifyService(
 				"QA",
-				"ssh://root@server.fubar.com:2222/run/podman/podman.sock",
+				"ssh://root@podman.test:2222/run/podman/podman.sock",
 				"~/.ssh/id_rsa",
 			))
 
@@ -82,7 +79,7 @@ var _ = Describe("podman system connection", func() {
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
 
-			Expect(config.ReadCustomConfig()).To(HaveActiveService("QE"))
+			Expect(config.ReadCustomConfig()).Should(HaveActiveService("QE"))
 		})
 
 		It("add UDS", func() {
@@ -141,7 +138,7 @@ var _ = Describe("podman system connection", func() {
 				"--default",
 				"--identity", "~/.ssh/id_rsa",
 				"QA",
-				"ssh://root@server.fubar.com:2222/run/podman/podman.sock",
+				"ssh://root@podman.test:2222/run/podman/podman.sock",
 			})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
@@ -155,8 +152,8 @@ var _ = Describe("podman system connection", func() {
 
 				cfg, err := config.ReadCustomConfig()
 				Expect(err).ShouldNot(HaveOccurred())
-				Expect(cfg.Engine.ActiveService).To(BeEmpty())
-				Expect(cfg.Engine.ServiceDestinations).To(BeEmpty())
+				Expect(cfg.Engine.ActiveService).Should(BeEmpty())
+				Expect(cfg.Engine.ServiceDestinations).Should(BeEmpty())
 			}
 		})
 
@@ -165,7 +162,7 @@ var _ = Describe("podman system connection", func() {
 				"--default",
 				"--identity", "~/.ssh/id_rsa",
 				"QA",
-				"ssh://root@server.fubar.com:2222/run/podman/podman.sock",
+				"ssh://root@podman.test:2222/run/podman/podman.sock",
 			})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
@@ -187,7 +184,7 @@ var _ = Describe("podman system connection", func() {
 					"--default",
 					"--identity", "~/.ssh/id_rsa",
 					name,
-					"ssh://root@server.fubar.com:2222/run/podman/podman.sock",
+					"ssh://root@podman.test:2222/run/podman/podman.sock",
 				}
 				session := podmanTest.Podman(cmd)
 				session.WaitWithDefaultTimeout()
@@ -247,7 +244,7 @@ var _ = Describe("podman system connection", func() {
 			// podman-remote commands will be executed by ginkgo directly.
 			SkipIfContainerized("sshd is not available when running in a container")
 			SkipIfRemote("connection heuristic requires both podman and podman-remote binaries")
-			SkipIfNotRootless(fmt.Sprintf("FIXME: setup ssh keys when root. uid(%d) euid(%d)", os.Getuid(), os.Geteuid()))
+			SkipIfNotRootless(fmt.Sprintf("FIXME: set up ssh keys when root. uid(%d) euid(%d)", os.Getuid(), os.Geteuid()))
 			SkipIfSystemdNotRunning("cannot test connection heuristic if systemd is not running")
 			SkipIfNotActive("sshd", "cannot test connection heuristic if sshd is not running")
 		})
@@ -255,6 +252,16 @@ var _ = Describe("podman system connection", func() {
 		It("add ssh:// socket path using connection heuristic", func() {
 			u, err := user.Current()
 			Expect(err).ShouldNot(HaveOccurred())
+
+			// Ensure that the remote end uses our built podman
+			if os.Getenv("PODMAN_BINARY") == "" {
+				err = os.Setenv("PODMAN_BINARY", podmanTest.PodmanBinary)
+				Expect(err).ShouldNot(HaveOccurred())
+
+				defer func() {
+					os.Unsetenv("PODMAN_BINARY")
+				}()
+			}
 
 			cmd := exec.Command(podmanTest.RemotePodmanBinary,
 				"system", "connection", "add",
@@ -268,6 +275,20 @@ var _ = Describe("podman system connection", func() {
 			Eventually(session, DefaultWaitTimeout).Should(Exit(0))
 			Expect(session.Out.Contents()).Should(BeEmpty())
 			Expect(session.Err.Contents()).Should(BeEmpty())
+
+			cmd = exec.Command(podmanTest.RemotePodmanBinary,
+				"--connection", "QA", "ps")
+			_, err = Start(cmd, GinkgoWriter, GinkgoWriter)
+			Expect(err).ToNot(HaveOccurred())
+
+			// export the container_host env var and try again
+			err = os.Setenv("CONTAINER_HOST", fmt.Sprintf("ssh://%s@localhost", u.Username))
+			Expect(err).ToNot(HaveOccurred())
+			defer os.Unsetenv("CONTAINER_HOST")
+
+			cmd = exec.Command(podmanTest.RemotePodmanBinary, "ps")
+			_, err = Start(cmd, GinkgoWriter, GinkgoWriter)
+			Expect(err).ToNot(HaveOccurred())
 
 			uri := url.URL{
 				Scheme: "ssh",

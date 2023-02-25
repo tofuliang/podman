@@ -5,7 +5,6 @@
 package signal
 
 import (
-	"os"
 	"syscall"
 )
 
@@ -89,12 +88,8 @@ var SignalMap = map[string]syscall.Signal{
 	"RTMAX":    sigrtmax,
 }
 
-// CatchAll catches all signals and relays them to the specified channel.
-func CatchAll(sigc chan os.Signal) {
-	panic("Unsupported on non-linux platforms")
-}
-
-// StopCatch stops catching the signals and closes the specified channel.
-func StopCatch(sigc chan os.Signal) {
-	panic("Unsupported on non-linux platforms")
+// IsSignalIgnoredBySigProxy determines whether to sig-proxy should ignore syscall signal
+// keep the container running or not. In unsupported OS this should not ignore any syscall signal.
+func IsSignalIgnoredBySigProxy(s syscall.Signal) bool {
+	return false
 }

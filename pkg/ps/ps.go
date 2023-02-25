@@ -1,6 +1,8 @@
 package ps
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	libnetworkTypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/podman/v4/libpod"
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
@@ -16,7 +19,6 @@ import (
 	psdefine "github.com/containers/podman/v4/pkg/ps/define"
 	"github.com/containers/storage"
 	"github.com/containers/storage/types"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -49,7 +51,14 @@ func GetContainerLists(runtime *libpod.Runtime, options entities.ContainerListOp
 		filterFuncs = append(filterFuncs, runningOnly)
 	}
 
-	cons, err := runtime.GetContainers(filterFuncs...)
+	// Load the containers with their states populated.  This speeds things
+	// up considerably as we use a signel DB connection to load the
+	// containers' states instead of one per container.
+	//
+	// This may return slightly outdated states but that's acceptable for
+	// listing containers; any state is outdated the point a container lock
+	// gets released.
+	cons, err := runtime.GetContainers(true, filterFuncs...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +74,7 @@ func GetContainerLists(runtime *libpod.Runtime, options entities.ContainerListOp
 	for _, con := range cons {
 		listCon, err := ListContainerBatch(runtime, con, options)
 		switch {
-		case errors.Cause(err) == define.ErrNoSuchCtr:
+		case errors.Is(err, define.ErrNoSuchCtr):
 			continue
 		case err != nil:
 			return nil, err
@@ -108,7 +117,7 @@ func GetExternalContainerLists(runtime *libpod.Runtime) ([]entities.ListContaine
 	for _, con := range externCons {
 		listCon, err := ListStorageContainer(runtime, con)
 		switch {
-		case errors.Cause(err) == types.ErrLoadError:
+		case errors.Is(err, types.ErrLoadError):
 			continue
 		case err != nil:
 			return nil, err
@@ -133,24 +142,27 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 		startedTime                             time.Time
 		exitedTime                              time.Time
 		cgroup, ipc, mnt, net, pidns, user, uts string
+		portMappings                            []libnetworkTypes.PortMapping
+		networks                                []string
+		healthStatus                            string
 	)
 
 	batchErr := ctr.Batch(func(c *libpod.Container) error {
 		if opts.Sync {
 			if err := c.Sync(); err != nil {
-				return errors.Wrapf(err, "unable to update container state from OCI runtime")
+				return fmt.Errorf("unable to update container state from OCI runtime: %w", err)
 			}
 		}
 
-		conConfig = c.Config()
+		conConfig = c.ConfigNoCopy()
 		conState, err = c.State()
 		if err != nil {
-			return errors.Wrapf(err, "unable to obtain container state")
+			return fmt.Errorf("unable to obtain container state: %w", err)
 		}
 
 		exitCode, exited, err = c.ExitCode()
 		if err != nil {
-			return errors.Wrapf(err, "unable to obtain container exit code")
+			return fmt.Errorf("unable to obtain container exit code: %w", err)
 		}
 		startedTime, err = c.StartedTime()
 		if err != nil {
@@ -163,7 +175,22 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 
 		pid, err = c.PID()
 		if err != nil {
-			return errors.Wrapf(err, "unable to obtain container pid")
+			return fmt.Errorf("unable to obtain container pid: %w", err)
+		}
+
+		portMappings, err = c.PortMappings()
+		if err != nil {
+			return err
+		}
+
+		networks, err = c.Networks()
+		if err != nil {
+			return err
+		}
+
+		healthStatus, err = c.HealthCheckStatus()
+		if err != nil {
+			return err
 		}
 
 		if !opts.Size && !opts.Namespace {
@@ -202,16 +229,6 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 		return entities.ListContainer{}, batchErr
 	}
 
-	portMappings, err := ctr.PortMappings()
-	if err != nil {
-		return entities.ListContainer{}, err
-	}
-
-	networks, err := ctr.Networks()
-	if err != nil {
-		return entities.ListContainer{}, err
-	}
-
 	ps := entities.ListContainer{
 		AutoRemove: ctr.AutoRemove(),
 		Command:    conConfig.Command,
@@ -233,12 +250,13 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 		Size:       size,
 		StartedAt:  startedTime.Unix(),
 		State:      conState.String(),
+		Status:     healthStatus,
 	}
 	if opts.Pod && len(conConfig.Pod) > 0 {
-		podName, err := rt.GetName(conConfig.Pod)
+		podName, err := rt.GetPodName(conConfig.Pod)
 		if err != nil {
-			if errors.Cause(err) == define.ErrNoSuchCtr {
-				return entities.ListContainer{}, errors.Wrapf(define.ErrNoSuchPod, "could not find container %s pod (id %s) in state", conConfig.ID, conConfig.Pod)
+			if errors.Is(err, define.ErrNoSuchCtr) {
+				return entities.ListContainer{}, fmt.Errorf("could not find container %s pod (id %s) in state: %w", conConfig.ID, conConfig.Pod, define.ErrNoSuchPod)
 			}
 			return entities.ListContainer{}, err
 		}
@@ -255,12 +273,6 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 			User:   user,
 			UTS:    uts,
 		}
-	}
-
-	if hc, err := ctr.HealthCheckStatus(); err == nil {
-		ps.Status = hc
-	} else {
-		logrus.Debug(err)
 	}
 
 	return ps, nil
@@ -282,7 +294,7 @@ func ListStorageContainer(rt *libpod.Runtime, ctr storage.Container) (entities.L
 
 	buildahCtr, err := rt.IsBuildahContainer(ctr.ID)
 	if err != nil {
-		return ps, errors.Wrapf(err, "error determining buildah container for container %s", ctr.ID)
+		return ps, fmt.Errorf("determining buildah container for container %s: %w", ctr.ID, err)
 	}
 
 	if buildahCtr {
@@ -311,7 +323,7 @@ func ListStorageContainer(rt *libpod.Runtime, ctr storage.Container) (entities.L
 func getNamespaceInfo(path string) (string, error) {
 	val, err := os.Readlink(path)
 	if err != nil {
-		return "", errors.Wrapf(err, "error getting info from %q", path)
+		return "", fmt.Errorf("getting info from %q: %w", path, err)
 	}
 	return getStrFromSquareBrackets(val), nil
 }

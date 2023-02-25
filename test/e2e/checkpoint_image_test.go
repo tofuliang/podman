@@ -21,6 +21,7 @@ var _ = Describe("Podman checkpoint", func() {
 	)
 
 	BeforeEach(func() {
+		SkipIfContainerized("FIXME: #15015. All checkpoint tests hang when containerized.")
 		SkipIfRootless("checkpoint not supported in rootless mode")
 		tempdir, err = CreateTempDirInTempDir()
 		if err != nil {
@@ -163,7 +164,7 @@ var _ = Describe("Podman checkpoint", func() {
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 	})
 
-	It("podman restore multiple containers from single checkpint image", func() {
+	It("podman restore multiple containers from single checkpoint image", func() {
 		// Container image must be lowercase
 		checkpointImage := "alpine-checkpoint-" + strings.ToLower(RandomString(6))
 		containerName := "alpine-container-" + RandomString(6)
@@ -225,7 +226,7 @@ var _ = Describe("Podman checkpoint", func() {
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 	})
 
-	It("podman restore multiple containers from multiple checkpint images", func() {
+	It("podman restore multiple containers from multiple checkpoint images", func() {
 		// Container image must be lowercase
 		checkpointImage1 := "alpine-checkpoint-" + strings.ToLower(RandomString(6))
 		checkpointImage2 := "alpine-checkpoint-" + strings.ToLower(RandomString(6))
@@ -288,6 +289,53 @@ var _ = Describe("Podman checkpoint", func() {
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 
 		result = podmanTest.Podman([]string{"rmi", checkpointImage1, checkpointImage2})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+	})
+
+	It("podman run with checkpoint image", func() {
+		// Container image must be lowercase
+		checkpointImage := "alpine-checkpoint-" + strings.ToLower(RandomString(6))
+		containerName := "alpine-container-" + RandomString(6)
+
+		// Create container
+		localRunString := []string{"run", "-d", "--name", containerName, ALPINE, "top"}
+		session := podmanTest.Podman(localRunString)
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		containerID1 := session.OutputToString()
+
+		// Checkpoint container, create checkpoint image
+		result := podmanTest.Podman([]string{"container", "checkpoint", "--create-image", checkpointImage, "--keep", containerID1})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+
+		// Remove existing container
+		result = podmanTest.Podman([]string{"rm", "-t", "1", "-f", containerName})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+
+		// Restore containers from image using `podman run`
+		result = podmanTest.Podman([]string{"run", checkpointImage})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+
+		// Check if the container is running
+		status := podmanTest.Podman([]string{"inspect", containerName, "--format={{.State.Status}}"})
+		status.WaitWithDefaultTimeout()
+		Expect(status).Should(Exit(0))
+		Expect(status.OutputToString()).To(Equal("running"))
+
+		// Clean-up
+		result = podmanTest.Podman([]string{"rm", "-t", "0", "-fa"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+
+		result = podmanTest.Podman([]string{"rmi", checkpointImage})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))

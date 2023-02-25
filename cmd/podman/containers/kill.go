@@ -2,8 +2,9 @@ package containers
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
@@ -13,7 +14,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/signal"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -49,7 +49,8 @@ var (
 )
 
 var (
-	killOptions = entities.KillOptions{}
+	killOptions  = entities.KillOptions{}
+	killCidFiles = []string{}
 )
 
 func killFlags(cmd *cobra.Command) {
@@ -61,7 +62,7 @@ func killFlags(cmd *cobra.Command) {
 	flags.StringVarP(&killOptions.Signal, signalFlagName, "s", "KILL", "Signal to send to the container")
 	_ = cmd.RegisterFlagCompletionFunc(signalFlagName, common.AutocompleteStopSignal)
 	cidfileFlagName := "cidfile"
-	flags.StringArrayVar(&cidFiles, cidfileFlagName, []string{}, "Read the container ID from the file")
+	flags.StringArrayVar(&killCidFiles, cidfileFlagName, nil, "Read the container ID from the file")
 	_ = cmd.RegisterFlagCompletionFunc(cidfileFlagName, completion.AutocompleteDefault)
 }
 
@@ -85,6 +86,7 @@ func kill(_ *cobra.Command, args []string) error {
 		err  error
 		errs utils.OutputErrors
 	)
+	args = utils.RemoveSlash(args)
 	// Check if the signalString provided by the user is valid
 	// Invalid signals will return err
 	sig, err := signal.ParseSignalNameOrNumber(killOptions.Signal)
@@ -94,10 +96,10 @@ func kill(_ *cobra.Command, args []string) error {
 	if sig < 1 || sig > 64 {
 		return errors.New("valid signals are 1 through 64")
 	}
-	for _, cidFile := range cidFiles {
-		content, err := ioutil.ReadFile(cidFile)
+	for _, cidFile := range killCidFiles {
+		content, err := os.ReadFile(cidFile)
 		if err != nil {
-			return errors.Wrap(err, "error reading CIDFile")
+			return fmt.Errorf("reading CIDFile: %w", err)
 		}
 		id := strings.Split(string(content), "\n")[0]
 		args = append(args, id)

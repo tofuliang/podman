@@ -1,15 +1,17 @@
 package containers
 
 import (
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -121,11 +123,12 @@ func logsFlags(cmd *cobra.Command) {
 }
 
 func logs(_ *cobra.Command, args []string) error {
+	args = utils.RemoveSlash(args)
 	if logsOptions.SinceRaw != "" {
 		// parse time, error out if something is wrong
 		since, err := util.ParseInputTime(logsOptions.SinceRaw, true)
 		if err != nil {
-			return errors.Wrapf(err, "error parsing --since %q", logsOptions.SinceRaw)
+			return fmt.Errorf("parsing --since %q: %w", logsOptions.SinceRaw, err)
 		}
 		logsOptions.Since = since
 	}
@@ -133,7 +136,7 @@ func logs(_ *cobra.Command, args []string) error {
 		// parse time, error out if something is wrong
 		until, err := util.ParseInputTime(logsOptions.UntilRaw, false)
 		if err != nil {
-			return errors.Wrapf(err, "error parsing --until %q", logsOptions.UntilRaw)
+			return fmt.Errorf("parsing --until %q: %w", logsOptions.UntilRaw, err)
 		}
 		logsOptions.Until = until
 	}

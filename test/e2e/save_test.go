@@ -1,14 +1,12 @@
 package integration
 
 import (
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/containers/podman/v4/pkg/rootless"
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -42,6 +40,15 @@ var _ = Describe("Podman save", func() {
 		outfile := filepath.Join(podmanTest.TempDir, "alpine.tar")
 
 		save := podmanTest.Podman([]string{"save", "-o", outfile, ALPINE})
+		save.WaitWithDefaultTimeout()
+		Expect(save).Should(Exit(0))
+	})
+
+	It("podman save signature-policy flag", func() {
+		SkipIfRemote("--signature-policy N/A for remote")
+		outfile := filepath.Join(podmanTest.TempDir, "alpine.tar")
+
+		save := podmanTest.Podman([]string{"save", "--signature-policy", "/etc/containers/policy.json", "-o", outfile, ALPINE})
 		save.WaitWithDefaultTimeout()
 		Expect(save).Should(Exit(0))
 	})
@@ -80,7 +87,7 @@ var _ = Describe("Podman save", func() {
 	})
 
 	It("podman save to directory with oci format", func() {
-		if rootless.IsRootless() {
+		if isRootless() {
 			Skip("Requires a fix in containers image for chown/lchown")
 		}
 		outdir := filepath.Join(podmanTest.TempDir, "save")
@@ -91,7 +98,7 @@ var _ = Describe("Podman save", func() {
 	})
 
 	It("podman save to directory with v2s2 docker format", func() {
-		if rootless.IsRootless() {
+		if isRootless() {
 			Skip("Requires a fix in containers image for chown/lchown")
 		}
 		outdir := filepath.Join(podmanTest.TempDir, "save")
@@ -102,7 +109,7 @@ var _ = Describe("Podman save", func() {
 	})
 
 	It("podman save to directory with docker format and compression", func() {
-		if rootless.IsRootless() && podmanTest.RemoteTest {
+		if isRootless() && podmanTest.RemoteTest {
 			Skip("Requires a fix in containers image for chown/lchown")
 		}
 		outdir := filepath.Join(podmanTest.TempDir, "save")
@@ -113,7 +120,7 @@ var _ = Describe("Podman save", func() {
 	})
 
 	It("podman save to directory with --compress but not use docker-dir and oci-dir", func() {
-		if rootless.IsRootless() && podmanTest.RemoteTest {
+		if isRootless() && podmanTest.RemoteTest {
 			Skip("Requires a fix in containers image for chown/lchown")
 		}
 		outdir := filepath.Join(podmanTest.TempDir, "save")
@@ -146,14 +153,17 @@ var _ = Describe("Podman save", func() {
 		}
 		tempGNUPGHOME := filepath.Join(podmanTest.TempDir, "tmpGPG")
 		err := os.Mkdir(tempGNUPGHOME, os.ModePerm)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		origGNUPGHOME := os.Getenv("GNUPGHOME")
 		err = os.Setenv("GNUPGHOME", tempGNUPGHOME)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		defer os.Setenv("GNUPGHOME", origGNUPGHOME)
 
 		port := 5000
-		session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", strings.Join([]string{strconv.Itoa(port), strconv.Itoa(port)}, ":"), "quay.io/libpod/registry:2.6"})
+		portlock := GetPortLock(strconv.Itoa(port))
+		defer portlock.Unlock()
+
+		session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", strings.Join([]string{strconv.Itoa(port), strconv.Itoa(port)}, ":"), REGISTRY_IMAGE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		if !WaitContainerReady(podmanTest, "registry", "listening on", 20, 1) {
@@ -162,7 +172,7 @@ var _ = Describe("Podman save", func() {
 
 		cmd := exec.Command("gpg", "--import", "sign/secret-key.asc")
 		err = cmd.Run()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		defaultYaml := filepath.Join(podmanTest.TempDir, "default.yaml")
 		cmd = exec.Command("cp", "/etc/containers/registries.d/default.yaml", defaultYaml)
@@ -175,14 +185,17 @@ var _ = Describe("Podman save", func() {
 			Expect(err).ToNot(HaveOccurred())
 		}()
 
-		cmd = exec.Command("cp", "sign/key.gpg", "/tmp/key.gpg")
-		Expect(cmd.Run()).To(BeNil())
+		keyPath := filepath.Join(podmanTest.TempDir, "key.gpg")
+		cmd = exec.Command("cp", "sign/key.gpg", keyPath)
+		Expect(cmd.Run()).To(Succeed())
+		defer os.Remove(keyPath)
+
 		sigstore := `
 default-docker:
   sigstore: file:///var/lib/containers/sigstore
   sigstore-staging: file:///var/lib/containers/sigstore
 `
-		Expect(ioutil.WriteFile("/etc/containers/registries.d/default.yaml", []byte(sigstore), 0755)).To(BeNil())
+		Expect(os.WriteFile("/etc/containers/registries.d/default.yaml", []byte(sigstore), 0755)).To(Succeed())
 
 		session = podmanTest.Podman([]string{"tag", ALPINE, "localhost:5000/alpine"})
 		session.WaitWithDefaultTimeout()
@@ -197,7 +210,11 @@ default-docker:
 		Expect(session).Should(Exit(0))
 
 		if !IsRemote() {
-			session = podmanTest.Podman([]string{"pull", "--tls-verify=false", "--signature-policy=sign/policy.json", "localhost:5000/alpine"})
+			// Generate a signature verification policy file
+			policyPath := generatePolicyFile(podmanTest.TempDir)
+			defer os.Remove(policyPath)
+
+			session = podmanTest.Podman([]string{"pull", "--tls-verify=false", "--signature-policy", policyPath, "localhost:5000/alpine"})
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(0))
 
@@ -226,13 +243,17 @@ default-docker:
 	})
 
 	It("podman save --multi-image-archive (untagged images)", func() {
-		// Refer to images via ID instead of tag.
-		session := podmanTest.Podman([]string{"images", "--format", "{{.ID}}"})
+		// #14468: to make execution time more predictable, save at
+		// most three images and sort them by size.
+		session := podmanTest.Podman([]string{"images", "--sort", "size", "--format", "{{.ID}}"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		ids := session.OutputToStringArray()
 
 		Expect(len(ids)).To(BeNumerically(">", 1), "We need to have *some* images to save")
+		if len(ids) > 3 {
+			ids = ids[:3]
+		}
 		multiImageSave(podmanTest, ids)
 	})
 })

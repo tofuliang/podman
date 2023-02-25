@@ -143,7 +143,7 @@ var _ = Describe("Podman images", func() {
 		result := podmanTest.Podman([]string{"images", "-q", "-f", "reference=quay.io/libpod/*"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
-		Expect(result.OutputToStringArray()).To(HaveLen(7))
+		Expect(result.OutputToStringArray()).To(HaveLen(8))
 
 		retalpine := podmanTest.Podman([]string{"images", "-f", "reference=*lpine*"})
 		retalpine.WaitWithDefaultTimeout()
@@ -165,13 +165,13 @@ var _ = Describe("Podman images", func() {
 
 	It("podman images filter before image", func() {
 		dockerfile := `FROM quay.io/libpod/alpine:latest
-RUN apk update && apk add strace
+RUN echo hello > /hello
 `
 		podmanTest.BuildImage(dockerfile, "foobar.com/before:latest", "false")
 		result := podmanTest.Podman([]string{"images", "-q", "-f", "before=foobar.com/before:latest"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
-		Expect(len(result.OutputToStringArray())).To(BeNumerically(">=", 1))
+		Expect(result.OutputToStringArray()).ToNot(BeEmpty())
 	})
 
 	It("podman images workingdir from  image", func() {
@@ -431,7 +431,7 @@ RUN > file2
 `
 		podmanTest.BuildImageWithLabel(dockerfile, "foobar.com/workdir:latest", "false", "abc")
 		podmanTest.BuildImageWithLabel(dockerfile2, "foobar.com/workdir:latest", "false", "xyz")
-		// --force used to to avoid y/n question
+		// --force used to avoid y/n question
 		result := podmanTest.Podman([]string{"image", "prune", "--filter", "label=abc", "--force"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))

@@ -69,7 +69,6 @@ func newServer(runtime *libpod.Runtime, listener net.Listener, opts entities.Ser
 		logrus.Debugf("CORS Headers were set to %q", opts.CorsHeaders)
 	}
 
-	logrus.Infof("API service listening on %q", listener.Addr())
 	router := mux.NewRouter().UseEncodedPath()
 	tracker := idle.NewTracker(opts.Timeout)
 
@@ -130,7 +129,7 @@ func newServer(runtime *libpod.Runtime, listener net.Listener, opts entities.Ser
 		server.registerMonitorHandlers,
 		server.registerNetworkHandlers,
 		server.registerPingHandlers,
-		server.registerPlayHandlers,
+		server.registerKubeHandlers,
 		server.registerPluginsHandlers,
 		server.registerPodsHandlers,
 		server.registerSecretHandlers,
@@ -148,7 +147,7 @@ func newServer(runtime *libpod.Runtime, listener net.Listener, opts entities.Ser
 	if logrus.IsLevelEnabled(logrus.TraceLevel) {
 		// If in trace mode log request and response bodies
 		router.Use(loggingHandler())
-		router.Walk(func(route *mux.Route, r *mux.Router, ancestors []*mux.Route) error { // nolint
+		_ = router.Walk(func(route *mux.Route, r *mux.Router, ancestors []*mux.Route) error {
 			path, err := route.GetPathTemplate()
 			if err != nil {
 				path = "<N/A>"

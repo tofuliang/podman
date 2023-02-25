@@ -1,4 +1,4 @@
-![PODMAN logo](../../logo/podman-logo-source.svg)
+![](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 
 Podman for Windows
 ==================
@@ -41,13 +41,14 @@ Installing the Windows Podman client begins by downloading the Podman Windows
 installer. The Windows installer is built with each Podman release and can be
 downloaded from the official
  [Github release page](https://github.com/containers/podman/releases). The
-Windows installer file is named podman-v.#.#.#.msi, where the # symbols
+Windows installer file is named podman-#.#.#-setup.exe, where the # symbols
 represent the version number of Podman. Be sure to download a 4.1 or later
 release for the capabilities discussed in this guide.
+As of 2023-02-21 the latest version is [v4.4.1](https://github.com/containers/podman/releases/download/v4.4.1/podman-4.4.1-setup.exe).
 
 ![Installing Podman 4.1.0](podman-win-install.jpg)
 
-Once downloaded, simply run the MSI file, and relaunch a new terminal. After
+Once downloaded, simply run the EXE file, and relaunch a new terminal. After
 this point, podman.exe will be present on your PATH, and you will be able to run
 the `podman machine init` command to create your first machine.
 
@@ -132,7 +133,7 @@ Port Forwarding
 
 Port forwarding also works as expected; ports will be bound against localhost
 (127.0.0.1). Note: When running as rootless (the default), you must use a port
-greater than 1023. See the Rooftull and Rootless section for more details.
+greater than 1023. See the Rootful and Rootless section for more details.
 
 To launch httpd, you can run:
 
@@ -194,12 +195,12 @@ PS C:\Users\User>.\docker.exe version --format '{{(index .Server.Components 0).N
 Podman Engine
 ```
 
-Rootfull & Rootless
--------------------
+Rootful & Rootless
+------------------
 
 On the embedded WSL Linux distro, podman can either be run under the root user
 (rootful) or a non-privileged user (rootless). For behavioral consistency with
-Podman on Linux, rootless is the default. Note: Rootfull and Rootless
+Podman on Linux, rootless is the default. Note: Rootful and Rootless
 containers are distinct and isolated from one another. Podman commands against
 one (e.g., podman ps) will not represent results/state for the other.
 
@@ -415,3 +416,8 @@ your WSL system state and perform a manual WSL installation using the `wsl
    wsl --install
    ```
 5. Continue with podman machine init
+
+Install Certificate Authority
+=============================
+
+Instructions for installing a CA certificate can be found [here](podman-install-certificate-authority.md).

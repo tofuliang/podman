@@ -11,7 +11,6 @@ import (
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -35,7 +34,7 @@ var (
 
 	// ABIMode used in cobra.Annotations registry.EngineMode when command only supports ABIMode
 	ABIMode = entities.ABIMode.String()
-	// TunnelMode used in in cobra.Annotations registry.EngineMode when command only supports TunnelMode
+	// TunnelMode used in cobra.Annotations registry.EngineMode when command only supports TunnelMode
 	TunnelMode = entities.TunnelMode.String()
 )
 
@@ -52,7 +51,7 @@ func newPodmanConfig() {
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewConfig("")
+	defaultConfig, err := config.Default()
 	if err != nil {
 		fmt.Fprint(os.Stderr, "Failed to obtain podman configuration: "+err.Error())
 		os.Exit(1)
@@ -62,7 +61,7 @@ func newPodmanConfig() {
 	switch runtime.GOOS {
 	case "darwin", "windows":
 		mode = entities.TunnelMode
-	case "linux":
+	case "linux", "freebsd":
 		// Some linux clients might only be compiled without ABI
 		// support (e.g., podman-remote).
 		if abiSupport && !IsRemote() {
@@ -77,11 +76,11 @@ func newPodmanConfig() {
 
 	// If EngineMode==Tunnel has not been set on the command line or environment
 	// but has been set in containers.conf...
-	if mode == entities.ABIMode && cfg.Engine.Remote {
+	if mode == entities.ABIMode && defaultConfig.Engine.Remote {
 		mode = entities.TunnelMode
 	}
 
-	podmanOptions = entities.PodmanConfig{Config: cfg, EngineMode: mode}
+	podmanOptions = entities.PodmanConfig{ContainersConf: &config.Config{}, ContainersConfDefaultsRO: defaultConfig, EngineMode: mode}
 }
 
 // setXdgDirs ensures the XDG_RUNTIME_DIR env and XDG_CONFIG_HOME variables are set.
@@ -92,32 +91,36 @@ func setXdgDirs() error {
 		return nil
 	}
 
-	// Setup XDG_RUNTIME_DIR
+	// Set up XDG_RUNTIME_DIR
 	if _, found := os.LookupEnv("XDG_RUNTIME_DIR"); !found {
 		dir, err := util.GetRuntimeDir()
 		if err != nil {
 			return err
 		}
 		if err := os.Setenv("XDG_RUNTIME_DIR", dir); err != nil {
-			return errors.Wrapf(err, "cannot set XDG_RUNTIME_DIR="+dir)
+			return fmt.Errorf("cannot set XDG_RUNTIME_DIR=%s: %w", dir, err)
 		}
 	}
 
 	if _, found := os.LookupEnv("DBUS_SESSION_BUS_ADDRESS"); !found {
 		sessionAddr := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus")
 		if _, err := os.Stat(sessionAddr); err == nil {
+			sessionAddr, err = filepath.EvalSymlinks(sessionAddr)
+			if err != nil {
+				return err
+			}
 			os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+sessionAddr)
 		}
 	}
 
-	// Setup XDG_CONFIG_HOME
+	// Set up XDG_CONFIG_HOME
 	if _, found := os.LookupEnv("XDG_CONFIG_HOME"); !found {
 		cfgHomeDir, err := util.GetRootlessConfigHomeDir()
 		if err != nil {
 			return err
 		}
 		if err := os.Setenv("XDG_CONFIG_HOME", cfgHomeDir); err != nil {
-			return errors.Wrapf(err, "cannot set XDG_CONFIG_HOME="+cfgHomeDir)
+			return fmt.Errorf("cannot set XDG_CONFIG_HOME=%s: %w", cfgHomeDir, err)
 		}
 	}
 	return nil

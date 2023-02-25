@@ -2,14 +2,12 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
 
-	"github.com/containers/podman/v4/pkg/rootless"
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -150,17 +148,17 @@ var _ = Describe("Podman run with volumes", func() {
 	})
 
 	It("podman run with conflict between image volume and user mount succeeds", func() {
-		err = podmanTest.RestoreArtifact(redis)
+		err = podmanTest.RestoreArtifact(REDIS_IMAGE)
 		Expect(err).ToNot(HaveOccurred())
 		mountPath := filepath.Join(podmanTest.TempDir, "secrets")
 		err := os.Mkdir(mountPath, 0755)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		testFile := filepath.Join(mountPath, "test1")
 		f, err := os.Create(testFile)
-		Expect(err).To(BeNil(), "os.Create(testfile)")
+		Expect(err).ToNot(HaveOccurred(), "os.Create(testfile)")
 		f.Close()
-		Expect(err).To(BeNil())
-		session := podmanTest.Podman([]string{"run", "-v", fmt.Sprintf("%s:/data", mountPath), redis, "ls", "/data/test1"})
+		Expect(err).ToNot(HaveOccurred())
+		session := podmanTest.Podman([]string{"run", "-v", fmt.Sprintf("%s:/data:Z", mountPath), REDIS_IMAGE, "ls", "/data/test1"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})
@@ -223,7 +221,7 @@ var _ = Describe("Podman run with volumes", func() {
 		if os.Getenv("container") != "" {
 			Skip("Overlay mounts not supported when running in a container")
 		}
-		if rootless.IsRootless() {
+		if isRootless() {
 			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
 				Skip("Fuse-Overlayfs required for rootless overlay mount test")
 			}
@@ -243,7 +241,7 @@ var _ = Describe("Podman run with volumes", func() {
 		if os.Getenv("container") != "" {
 			Skip("Overlay mounts not supported when running in a container")
 		}
-		if rootless.IsRootless() {
+		if isRootless() {
 			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
 				Skip("Fuse-Overlayfs required for rootless overlay mount test")
 			}
@@ -276,7 +274,7 @@ var _ = Describe("Podman run with volumes", func() {
 		if os.Getenv("container") != "" {
 			Skip("Overlay mounts not supported when running in a container")
 		}
-		if rootless.IsRootless() {
+		if isRootless() {
 			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
 				Skip("Fuse-Overlayfs required for rootless overlay mount test")
 			}
@@ -285,12 +283,12 @@ var _ = Describe("Podman run with volumes", func() {
 		// create persistent upperdir on host
 		upperDir := filepath.Join(tempdir, "upper")
 		err := os.Mkdir(upperDir, 0755)
-		Expect(err).To(BeNil(), "mkdir "+upperDir)
+		Expect(err).ToNot(HaveOccurred(), "mkdir "+upperDir)
 
 		// create persistent workdir on host
 		workDir := filepath.Join(tempdir, "work")
 		err = os.Mkdir(workDir, 0755)
-		Expect(err).To(BeNil(), "mkdir "+workDir)
+		Expect(err).ToNot(HaveOccurred(), "mkdir "+workDir)
 
 		overlayOpts := fmt.Sprintf("upperdir=%s,workdir=%s", upperDir, workDir)
 
@@ -325,6 +323,51 @@ var _ = Describe("Podman run with volumes", func() {
 
 	})
 
+	It("podman support overlay volume with custom upperdir and workdir", func() {
+		SkipIfRemote("Overlay volumes only work locally")
+		if os.Getenv("container") != "" {
+			Skip("Overlay mounts not supported when running in a container")
+		}
+		if isRootless() {
+			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
+				Skip("Fuse-Overlayfs required for rootless overlay mount test")
+			}
+		}
+
+		// Use bindsource instead of named volume
+		bindSource := filepath.Join(tempdir, "bindsource")
+		err := os.Mkdir(bindSource, 0755)
+		Expect(err).ToNot(HaveOccurred(), "mkdir "+bindSource)
+
+		// create persistent upperdir on host
+		upperDir := filepath.Join(tempdir, "upper")
+		err = os.Mkdir(upperDir, 0755)
+		Expect(err).ToNot(HaveOccurred(), "mkdir "+upperDir)
+
+		// create persistent workdir on host
+		workDir := filepath.Join(tempdir, "work")
+		err = os.Mkdir(workDir, 0755)
+		Expect(err).ToNot(HaveOccurred(), "mkdir "+workDir)
+
+		overlayOpts := fmt.Sprintf("upperdir=%s,workdir=%s", upperDir, workDir)
+
+		// create file on overlay volume
+		session := podmanTest.Podman([]string{"run", "--volume", bindSource + ":/data:O," + overlayOpts, ALPINE, "sh", "-c", "echo hello >> " + "/data/overlay"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"run", "--volume", bindSource + ":/data:O," + overlayOpts, ALPINE, "sh", "-c", "ls /data"})
+		session.WaitWithDefaultTimeout()
+		// must contain `overlay` file since it should be persistent on specified upper and workdir
+		Expect(session.OutputToString()).To(ContainSubstring("overlay"))
+
+		session = podmanTest.Podman([]string{"run", "--volume", bindSource + ":/data:O", ALPINE, "sh", "-c", "ls /data"})
+		session.WaitWithDefaultTimeout()
+		// must not contain `overlay` file which was on custom upper and workdir since we have not specified any upper or workdir
+		Expect(session.OutputToString()).To(Not(ContainSubstring("overlay")))
+
+	})
+
 	It("podman run with noexec can't exec", func() {
 		session := podmanTest.Podman([]string{"run", "--rm", "-v", "/bin:/hostbin:noexec", ALPINE, "/hostbin/ls", "/"})
 		session.WaitWithDefaultTimeout()
@@ -341,7 +384,7 @@ var _ = Describe("Podman run with volumes", func() {
 
 		// Volume not mounted on create
 		mountCmd1, err := Start(exec.Command("mount"), GinkgoWriter, GinkgoWriter)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		mountCmd1.Wait(90)
 		Expect(mountCmd1).Should(Exit(0))
 		os.Stdout.Sync()
@@ -357,7 +400,7 @@ var _ = Describe("Podman run with volumes", func() {
 
 		// Volume now mounted as container is running
 		mountCmd2, err := Start(exec.Command("mount"), GinkgoWriter, GinkgoWriter)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		mountCmd2.Wait(90)
 		Expect(mountCmd2).Should(Exit(0))
 		os.Stdout.Sync()
@@ -378,7 +421,7 @@ var _ = Describe("Podman run with volumes", func() {
 
 		// Ensure volume is unmounted
 		mountCmd3, err := Start(exec.Command("mount"), GinkgoWriter, GinkgoWriter)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		mountCmd3.Wait(90)
 		Expect(mountCmd3).Should(Exit(0))
 		os.Stdout.Sync()
@@ -407,6 +450,14 @@ var _ = Describe("Podman run with volumes", func() {
 		separateVolumeSession.WaitWithDefaultTimeout()
 		Expect(separateVolumeSession).Should(Exit(0))
 		Expect(separateVolumeSession.OutputToString()).To(Equal(baselineOutput))
+
+		copySession := podmanTest.Podman([]string{"run", "--rm", "-v", "testvol3:/etc/apk:copy", ALPINE, "stat", "-c", "%h", "/etc/apk/arch"})
+		copySession.WaitWithDefaultTimeout()
+		Expect(copySession).Should(Exit(0))
+
+		noCopySession := podmanTest.Podman([]string{"run", "--rm", "-v", "testvol4:/etc/apk:nocopy", ALPINE, "stat", "-c", "%h", "/etc/apk/arch"})
+		noCopySession.WaitWithDefaultTimeout()
+		Expect(noCopySession).Should(Exit(1))
 	})
 
 	It("podman named volume copyup symlink", func() {
@@ -539,7 +590,7 @@ RUN sh -c "cd /etc/apk && ln -s ../../testfile"`, ALPINE)
 	})
 
 	It("podman run image volume is not noexec", func() {
-		session := podmanTest.Podman([]string{"run", "--rm", redis, "grep", "/data", "/proc/self/mountinfo"})
+		session := podmanTest.Podman([]string{"run", "--rm", REDIS_IMAGE, "grep", "/data", "/proc/self/mountinfo"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(Not(ContainSubstring("noexec")))
@@ -569,7 +620,7 @@ RUN sh -c "cd /etc/apk && ln -s ../../testfile"`, ALPINE)
 
 		fileName := "thisIsATestFile"
 		file, err := os.Create(filepath.Join(path, fileName))
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		defer file.Close()
 
 		runLs := podmanTest.Podman([]string{"run", "-t", "-i", "--rm", "-v", fmt.Sprintf("%v:/etc/ssl", volName), ALPINE, "ls", "-1", "/etc/ssl"})
@@ -603,7 +654,7 @@ VOLUME /test/`, ALPINE)
 		if os.Getenv("container") != "" {
 			Skip("Overlay mounts not supported when running in a container")
 		}
-		if rootless.IsRootless() {
+		if isRootless() {
 			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
 				Skip("Fuse-Overlayfs required for rootless overlay mount test")
 			}
@@ -613,7 +664,7 @@ VOLUME /test/`, ALPINE)
 		Expect(err).ToNot(HaveOccurred())
 		testFile := filepath.Join(mountPath, "test1")
 		f, err := os.Create(testFile)
-		Expect(err).To(BeNil(), "os.Create "+testFile)
+		Expect(err).ToNot(HaveOccurred(), "os.Create "+testFile)
 		f.Close()
 
 		// Make sure host directory gets mounted in to container as overlay
@@ -625,12 +676,21 @@ VOLUME /test/`, ALPINE)
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
+		// Test overlay mount when lowerdir is relative path.
+		f, err = os.Create("hello")
+		Expect(err).ToNot(HaveOccurred(), "os.Create")
+		f.Close()
+		session = podmanTest.Podman([]string{"run", "--rm", "-v", ".:/app:O", ALPINE, "ls", "/app"})
+		session.WaitWithDefaultTimeout()
+		Expect(session.OutputToString()).To(ContainSubstring("hello"))
+		Expect(session).Should(Exit(0))
+
 		// Make sure modifications in container do not show up on host
 		session = podmanTest.Podman([]string{"run", "--rm", "-v", volumeFlag, ALPINE, "touch", "/run/test/container"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		_, err = os.Stat(filepath.Join(mountPath, "container"))
-		Expect(err).To(Not(BeNil()))
+		Expect(err).To(HaveOccurred())
 
 		// Make sure modifications in container disappear when container is stopped
 		session = podmanTest.Podman([]string{"create", "-v", fmt.Sprintf("%s:/run/test:O", mountPath), ALPINE, "top"})
@@ -662,11 +722,11 @@ VOLUME /test/`, ALPINE)
 		Expect(err).ToNot(HaveOccurred())
 		testFile := filepath.Join(mountPath, "test1")
 		f, err := os.Create(testFile)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		f.Close()
 		mountSrc := filepath.Join(podmanTest.TempDir, "vol-test1")
 		err = os.MkdirAll(mountSrc, 0755)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		mountDest := "/run/test"
 		volName := "myvol"
 
@@ -700,13 +760,13 @@ VOLUME /test/`, ALPINE)
 		SkipIfRemote("Overlay volumes only work locally")
 
 		u, err := user.Current()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		name := u.Username
 		if name == "root" {
 			name = "containers"
 		}
 
-		content, err := ioutil.ReadFile("/etc/subuid")
+		content, err := os.ReadFile("/etc/subuid")
 		if err != nil {
 			Skip("cannot read /etc/subuid")
 		}
@@ -717,7 +777,7 @@ VOLUME /test/`, ALPINE)
 		if os.Getenv("container") != "" {
 			Skip("Overlay mounts not supported when running in a container")
 		}
-		if rootless.IsRootless() {
+		if isRootless() {
 			if _, err := exec.LookPath("fuse_overlay"); err != nil {
 				Skip("Fuse-Overlayfs required for rootless overlay mount test")
 			}
@@ -747,13 +807,13 @@ VOLUME /test/`, ALPINE)
 
 	It("podman run with --mount and U flag", func() {
 		u, err := user.Current()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		name := u.Username
 		if name == "root" {
 			name = "containers"
 		}
 
-		content, err := ioutil.ReadFile("/etc/subuid")
+		content, err := os.ReadFile("/etc/subuid")
 		if err != nil {
 			Skip("cannot read /etc/subuid")
 		}
@@ -863,6 +923,20 @@ USER testuser`, fedoraMinimal)
 		Expect(session.OutputToString()).To(Equal(perms))
 	})
 
+	It("podman run with -v $SRC:/run does not create /run/.containerenv", func() {
+		mountSrc := filepath.Join(podmanTest.TempDir, "vol-test1")
+		err := os.MkdirAll(mountSrc, 0755)
+		Expect(err).ToNot(HaveOccurred())
+
+		session := podmanTest.Podman([]string{"run", "-v", mountSrc + ":/run", ALPINE, "true"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		// the file should not have been created
+		_, err = os.Stat(filepath.Join(mountSrc, ".containerenv"))
+		Expect(err).To(HaveOccurred())
+	})
+
 	It("podman volume with uid and gid works", func() {
 		volName := "testVol"
 		volCreate := podmanTest.Podman([]string{"volume", "create", "--opt", "o=uid=1000", volName})
@@ -893,5 +967,33 @@ USER testuser`, fedoraMinimal)
 		volMount.WaitWithDefaultTimeout()
 		Expect(volMount).Should(Exit(0))
 		Expect(volMount.OutputToString()).To(Equal("1000:1000"))
+	})
+
+	It("podman run -v with a relative dir", func() {
+		mountPath := filepath.Join(podmanTest.TempDir, "vol")
+		err = os.Mkdir(mountPath, 0755)
+		Expect(err).ToNot(HaveOccurred())
+		defer func() {
+			err := os.RemoveAll(mountPath)
+			Expect(err).ToNot(HaveOccurred())
+		}()
+
+		f, err := os.CreateTemp(mountPath, "podman")
+		Expect(err).ToNot(HaveOccurred())
+
+		cwd, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+
+		err = os.Chdir(mountPath)
+		Expect(err).ToNot(HaveOccurred())
+		defer func() {
+			err := os.Chdir(cwd)
+			Expect(err).ToNot(HaveOccurred())
+		}()
+
+		run := podmanTest.Podman([]string{"run", "-it", "--security-opt", "label=disable", "-v", "./:" + dest, ALPINE, "ls", dest})
+		run.WaitWithDefaultTimeout()
+		Expect(run).Should(Exit(0))
+		Expect(run.OutputToString()).Should(ContainSubstring(strings.TrimLeft("/vol/", f.Name())))
 	})
 })

@@ -1,4 +1,4 @@
-% podman-image-mount(1)
+% podman-image-mount 1
 
 ## NAME
 podman\-image\-mount - Mount an image's root filesystem
@@ -10,11 +10,11 @@ podman\-image\-mount - Mount an image's root filesystem
 Mounts the specified images' root file system in a location which can be
 accessed from the host, and returns its location.
 
-If you execute the command without any arguments, Podman will list all of the
+The `podman image mount` command without any arguments lists all of the
 currently mounted images.
 
-Rootless mode only supports mounting VFS driver, unless you enter the user namespace
-via the `podman unshare` command. All other storage drivers will fail to mount.
+Rootless mode only supports mounting VFS driver, unless podman is run in a user namespace.
+Use the `podman unshare` command to enter the user namespace. All other storage drivers will fail to mount.
 
 ## RETURN VALUE
 The location of the mounted file system.  On error an empty string and errno is
@@ -73,4 +73,4 @@ podman image mount --format json
 ```
 
 ## SEE ALSO
-**[podman(1)](podman.1.md)**, **[podman-image(1)](podman-image.1.md)**, **[podman-image-umount(1)](podman-image-umount.1.md)**, **[podman-unshare(1)](podman-unshare.1.md)**, **mount(8)**
+**[podman(1)](podman.1.md)**, **[podman-image(1)](podman-image.1.md)**, **[podman-image-unmount(1)](podman-image-unmount.1.md)**, **[podman-unshare(1)](podman-unshare.1.md)**, **mount(8)**

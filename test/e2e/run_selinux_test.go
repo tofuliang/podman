@@ -298,7 +298,7 @@ var _ = Describe("Podman run", func() {
 		runtime := podmanTest.OCIRuntime
 		podmanTest.OCIRuntime = filepath.Join(podmanTest.TempDir, "kata-runtime")
 		err := os.Symlink("/bin/true", podmanTest.OCIRuntime)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		if IsRemote() {
 			podmanTest.StopRemoteService()
 			podmanTest.StartRemoteService()
@@ -319,7 +319,7 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman test init labels", func() {
-		session := podmanTest.Podman([]string{"create", UBI_INIT, "/sbin/init"})
+		session := podmanTest.Podman([]string{"create", SYSTEMD_IMAGE, "/sbin/init"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		cid := session.OutputToString()

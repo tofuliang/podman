@@ -1,4 +1,4 @@
-% podman-ps(1)
+% podman-ps 1
 
 ## NAME
 podman\-ps - Prints out information about containers
@@ -52,7 +52,7 @@ Valid filters are listed below:
 | label           | [Key] or [Key=Value] Label assigned to a container                               |
 | exited          | [Int] Container's exit code                                                      |
 | status          | [Status] Container's status: 'created', 'exited', 'paused', 'running', 'unknown' |
-| ancestor        | [ImageName] Image or descendant used to create container                         |
+| ancestor        | [ImageName] Image or descendant used to create container (accepts regex)         |
 | before          | [ID] or [Name] Containers created before this container                          |
 | since           | [ID] or [Name] Containers created since this container                           |
 | volume          | [VolumeName] or [MountpointDestination] Volume mounted in container              |
@@ -67,22 +67,33 @@ Pretty-print containers to JSON or using a Go template
 
 Valid placeholders for the Go template are listed below:
 
-| **Placeholder** | **Description**                                  |
-| --------------- | ------------------------------------------------ |
-| .ID             | Container ID                                     |
-| .Image          | Image Name/ID                                    |
-| .ImageID        | Image ID                                         |
-| .Command        | Quoted command used                              |
-| .CreatedAt      | Creation time for container                      |
-| .RunningFor     | Time elapsed since container was started         |
-| .Status         | Status of container                              |
-| .Pod            | Pod the container is associated with             |
-| .Ports          | Exposed ports                                    |
-| .Size           | Size of container                                |
-| .Names          | Name of container                                |
-| .Networks       | Show all networks connected to the container     |
-| .Labels         | All the labels assigned to the container         |
-| .Mounts         | Volumes mounted in the container                 |
+| **Placeholder**    | **Description**                              |
+|--------------------|----------------------------------------------|
+| .AutoRemove        | If true, container will be removed on exit   |
+| .Command           | Quoted command used                          |
+| .Created           | Creation time for container, Y-M-D H:M:S     |
+| .CreatedAt         | Creation time for container (same as above)  |
+| .CreatedHuman      | Creation time, relative                      |
+| .ExitCode          | Container exit code                          |
+| .Exited            | "true" if container has exited               |
+| .ExitedAt          | Time (epoch seconds) that container exited   |
+| .ID                | Container ID                                 |
+| .Image             | Image Name/ID                                |
+| .ImageID           | Image ID                                     |
+| .IsInfra           | "true" if infra container                    |
+| .Labels            | All the labels assigned to the container     |
+| .Mounts            | Volumes mounted in the container             |
+| .Names             | Name of container                            |
+| .Networks          | Show all networks connected to the container |
+| .Pid               | Process ID on host system                    |
+| .Pod               | Pod the container is associated with (SHA)   |
+| .PodName           | Seems to be empty no matter what             |
+| .Ports             | Exposed ports                                |
+| .RunningFor        | Time elapsed since container was started     |
+| .Size              | Size of container                            |
+| .StartedAt         | Time (epoch seconds) the container started   |
+| .State             | Human-friendly description of ctr state      |
+| .Status            | Status of container                          |
 
 #### **--help**, **-h**
 
@@ -175,9 +186,9 @@ CONTAINER ID   IMAGE         COMMAND         CREATED       STATUS               
 
 ```
 $ podman ps
-CONTAINER ID  IMAGE                            COMMAND    CREATED        STATUS            PORTS                                                   NAMES
-4089df24d4f3  docker.io/library/centos:latest  /bin/bash  2 minutes ago  Up 2 minutes ago  0.0.0.0:80->8080/tcp, 0.0.0.0:2000-2006->2000-2006/tcp  manyports
-92f58933c28c  docker.io/library/centos:latest  /bin/bash  3 minutes ago  Up 3 minutes ago  192.168.99.100:1000-1006->1000-1006/tcp                 zen_sanderson
+CONTAINER ID  IMAGE                            COMMAND    CREATED        STATUS        PORTS                                                   NAMES
+4089df24d4f3  docker.io/library/centos:latest  /bin/bash  2 minutes ago  Up 2 minutes  0.0.0.0:80->8080/tcp, 0.0.0.0:2000-2006->2000-2006/tcp  manyports
+92f58933c28c  docker.io/library/centos:latest  /bin/bash  3 minutes ago  Up 3 minutes  192.168.99.100:1000-1006->1000-1006/tcp                 zen_sanderson
 
 ```
 

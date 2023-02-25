@@ -58,6 +58,13 @@ var _ = Describe("Podman run", func() {
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("/bin"))
 
+		// Verify environ keys with spaces do not blow up podman command
+		os.Setenv("FOO BAR", "BAZ")
+		session = podmanTest.Podman([]string{"run", "--rm", ALPINE, "true"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		os.Unsetenv("FOO BAR")
+
 		os.Setenv("FOO", "BAR")
 		session = podmanTest.Podman([]string{"run", "--rm", "--env", "FOO", ALPINE, "printenv", "FOO"})
 		session.WaitWithDefaultTimeout()
@@ -82,6 +89,17 @@ var _ = Describe("Podman run", func() {
 		Expect(session.OutputToString()).To(ContainSubstring("HOSTNAME"))
 	})
 
+	It("podman run with --env-merge", func() {
+		dockerfile := `FROM quay.io/libpod/alpine:latest
+ENV hello=world
+`
+		podmanTest.BuildImage(dockerfile, "test", "false")
+		session := podmanTest.Podman([]string{"run", "--rm", "--env-merge", "hello=${hello}-earth", "test", "env"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(ContainSubstring("world-earth"))
+	})
+
 	It("podman run --env-host environment test", func() {
 		env := append(os.Environ(), "FOO=BAR")
 		session := podmanTest.PodmanAsUser([]string{"run", "--rm", "--env-host", ALPINE, "/bin/printenv", "FOO"}, 0, 0, "", env)
@@ -103,10 +121,18 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman run --http-proxy test", func() {
+		if env, found := os.LookupEnv("http_proxy"); found {
+			defer os.Setenv("http_proxy", env)
+		} else {
+			defer os.Unsetenv("http_proxy")
+		}
 		os.Setenv("http_proxy", "1.2.3.4")
 		if IsRemote() {
 			podmanTest.StopRemoteService()
 			podmanTest.StartRemoteService()
+			// set proxy env again so it will only effect the client
+			// the remote client should still use the proxy that was set for the server
+			os.Setenv("http_proxy", "127.0.0.2")
 		}
 		session := podmanTest.Podman([]string{"run", "--rm", ALPINE, "printenv", "http_proxy"})
 		session.WaitWithDefaultTimeout()
@@ -122,12 +148,10 @@ var _ = Describe("Podman run", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("5.6.7.8"))
-		os.Unsetenv("http_proxy")
 
 		session = podmanTest.Podman([]string{"run", "--http-proxy=false", "--env", "http_proxy=5.6.7.8", ALPINE, "printenv", "http_proxy"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("5.6.7.8"))
-		os.Unsetenv("http_proxy")
 	})
 })

@@ -1,7 +1,7 @@
-% podman-volume-import(1)
+% podman-volume-import 1
 
 ## NAME
-podman\-volume\-import - Import tarball contents into a podman volume
+podman\-volume\-import - Import tarball contents into an existing podman volume
 
 ## SYNOPSIS
 **podman volume import** *volume* [*source*]
@@ -9,11 +9,12 @@ podman\-volume\-import - Import tarball contents into a podman volume
 ## DESCRIPTION
 
 **podman volume import** imports the contents of a tarball into the podman volume's mount point.
+The contents of the volume will be merged with the content of the tarball with the latter taking precedence.
 **podman volume import** can consume piped input when using `-` as source path.
 
-Note: Following command is not supported by podman-remote.
+The given volume must already exist and will not be created by podman volume import.
 
-**podman volume import VOLUME [SOURCE]**
+Note: Following command is not supported by podman-remote.
 
 #### **--help**
 

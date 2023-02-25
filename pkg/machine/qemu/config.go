@@ -1,6 +1,3 @@
-//go:build (amd64 && !windows) || (arm64 && !windows)
-// +build amd64,!windows arm64,!windows
-
 package qemu
 
 import (
@@ -9,20 +6,11 @@ import (
 	"github.com/containers/podman/v4/pkg/machine"
 )
 
-const (
-	// FCOS streams
-	// Testing FCOS stream
-	Testing string = "testing"
-	// Next FCOS stream
-	Next string = "next"
-	// Stable FCOS stream
-	Stable string = "stable"
-
-	// Max length of fully qualified socket path
-
-)
-
-type Provider struct{}
+type Virtualization struct {
+	artifact    machine.Artifact
+	compression machine.ImageCompression
+	format      machine.ImageFormat
+}
 
 // Deprecated: MachineVMV1 is being deprecated in favor a more flexible and informative
 // structure
@@ -72,8 +60,10 @@ type MachineVM struct {
 	Mounts []machine.Mount
 	// Name of VM
 	Name string
-	// PidFilePath is the where the PID file lives
+	// PidFilePath is the where the Proxy PID file lives
 	PidFilePath machine.VMFile
+	// VMPidFilePath is the where the VM PID file lives
+	VMPidFilePath machine.VMFile
 	// QMPMonitor is the qemu monitor object for sending commands
 	QMPMonitor Monitor
 	// ReadySocket tells host when vm is booted

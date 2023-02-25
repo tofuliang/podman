@@ -9,20 +9,21 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/libpod/events"
 	"github.com/containers/podman/v4/pkg/machine"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
 var (
 	startCmd = &cobra.Command{
-		Use:               "start [MACHINE]",
+		Use:               "start [options] [MACHINE]",
 		Short:             "Start an existing machine",
 		Long:              "Start a managed virtual machine ",
+		PersistentPreRunE: rootlessOnly,
 		RunE:              start,
 		Args:              cobra.MaximumNArgs(1),
 		Example:           `podman machine start myvm`,
 		ValidArgsFunction: autocompleteMachine,
 	}
+	startOpts = machine.StartOptions{}
 )
 
 func init() {
@@ -30,6 +31,13 @@ func init() {
 		Command: startCmd,
 		Parent:  machineCmd,
 	})
+
+	flags := startCmd.Flags()
+	noInfoFlagName := "no-info"
+	flags.BoolVar(&startOpts.NoInfo, noInfoFlagName, false, "Suppress informational tips")
+
+	quietFlagName := "quiet"
+	flags.BoolVarP(&startOpts.Quiet, quietFlagName, "q", false, "Suppress machine starting status output")
 }
 
 func start(_ *cobra.Command, args []string) error {
@@ -37,6 +45,9 @@ func start(_ *cobra.Command, args []string) error {
 		err error
 		vm  machine.VM
 	)
+
+	startOpts.NoInfo = startOpts.Quiet || startOpts.NoInfo
+
 	vmName := defaultMachineName
 	if len(args) > 0 && len(args[0]) > 0 {
 		vmName = args[0]
@@ -54,12 +65,14 @@ func start(_ *cobra.Command, args []string) error {
 	}
 	if active {
 		if vmName == activeName {
-			return errors.Wrapf(machine.ErrVMAlreadyRunning, "cannot start VM %s", vmName)
+			return fmt.Errorf("cannot start VM %s: %w", vmName, machine.ErrVMAlreadyRunning)
 		}
-		return errors.Wrapf(machine.ErrMultipleActiveVM, "cannot start VM %s. VM %s is currently running", vmName, activeName)
+		return fmt.Errorf("cannot start VM %s. VM %s is currently running or starting: %w", vmName, activeName, machine.ErrMultipleActiveVM)
 	}
-	fmt.Printf("Starting machine %q\n", vmName)
-	if err := vm.Start(vmName, machine.StartOptions{}); err != nil {
+	if !startOpts.Quiet {
+		fmt.Printf("Starting machine %q\n", vmName)
+	}
+	if err := vm.Start(vmName, startOpts); err != nil {
 		return err
 	}
 	fmt.Printf("Machine %q started successfully\n", vmName)

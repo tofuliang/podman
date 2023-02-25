@@ -1,10 +1,8 @@
-// nolint
 // most of these validate and parse functions have been taken from projectatomic/docker
 // and modified for cri-o
 package parse
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 
@@ -16,14 +14,13 @@ var (
 )
 
 func createTmpFile(content []byte) (string, error) {
-	tmpfile, err := ioutil.TempFile(os.TempDir(), "unittest")
+	tmpfile, err := os.CreateTemp(os.TempDir(), "unittest")
 	if err != nil {
 		return "", err
 	}
 
 	if _, err := tmpfile.Write(content); err != nil {
 		return "", err
-
 	}
 	if err := tmpfile.Close(); err != nil {
 		return "", err

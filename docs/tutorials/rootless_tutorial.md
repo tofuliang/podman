@@ -1,4 +1,4 @@
-![PODMAN logo](../../logo/podman-logo-source.svg)
+![PODMAN logo](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 
 # Basic Setup and Use of Podman in a Rootless environment.
 
@@ -37,7 +37,7 @@ Your distribution might already provide it in the `fuse-overlayfs` package, but 
 
 The `fuse-overlayfs` project is available from [GitHub](https://github.com/containers/fuse-overlayfs), and provides instructions for easily building a static `fuse-overlayfs` executable.
 
-If Podman is used before `fuse-overlayfs` is installed, it may be necessary to adjust the `storage.conf` file (see "User Configuration Files" below) to change the `driver` option under `[storage]` to `"overlay"` and point the `mount_program` option in `[storage.options]` to the path of the `fuse-overlayfs` executable:
+If Podman is used before `fuse-overlayfs` is installed, it may be necessary to adjust the `storage.conf` file (see "User Configuration Files" below) to change the `driver` option under `[storage]` to `"overlay"` and point the `mount_program` option in `[storage.options.overlay]` to the path of the `fuse-overlayfs` executable:
 
 ```
 [storage]
@@ -45,7 +45,7 @@ If Podman is used before `fuse-overlayfs` is installed, it may be necessary to a
 
   (...)
 
-[storage.options]
+[storage.options.overlay]
 
   (...)
 
@@ -186,10 +186,10 @@ We do recognize that this doesn't really match how many people intend to use roo
 
 It is also helpful to distinguish between running Podman as a rootless user, and a container which is built to run rootless. If the container you're trying to run has a `USER` which is not root, then when mounting volumes you **must** use `--userns=keep-id`. This is because the container user would not be able to become `root` and access the mounted volumes.
 
-Other considerations in regards to volumes:
+Another consideration in regards to volumes:
 
-- You should always give the full path to the volume you'd like to mount
-- The mount point must exist in the container
+- When providing the path of a directory you'd like to bind-mount, the path needs to be provided as an absolute path
+  or a relative path that starts with `.` (a dot), otherwise the string will be interpreted as the name of a named volume.
 
 ## More information
 

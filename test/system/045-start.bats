@@ -40,6 +40,8 @@ load helpers
 @test "podman start --filter - start only containers that match the filter" {
     run_podman run -d $IMAGE /bin/true
     cid="$output"
+    run_podman wait $cid
+
     run_podman start --filter restart-policy=always $cid
     is "$output" "" "CID of restart-policy=always container"
 
@@ -64,6 +66,22 @@ load helpers
     run_podman wait $cid_exited_0 $cid_exited_1
     run_podman start --all --filter exited=0
     is "$output" "$cid_exited_0"
+}
+
+@test "podman start print IDs or raw input" {
+    # start --all must print the IDs
+    run_podman create $IMAGE top
+    ctrID="$output"
+    run_podman start --all
+    is "$output" "$ctrID"
+
+    # start $input must print $input
+    cname=$(random_string)
+    run_podman create --name $cname $IMAGE top
+    run_podman start $cname
+    is "$output" $cname
+
+    run_podman rm -t 0 -f $ctrID $cname
 }
 
 # vim: filetype=sh

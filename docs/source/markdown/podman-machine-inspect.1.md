@@ -1,10 +1,10 @@
-% podman-machine-inspect(1)
+% podman-machine-inspect 1
 
 ## NAME
 podman\-machine\-inspect - Inspect one or more virtual machines
 
 ## SYNOPSIS
-**podman machine inspect** [*options] *name* ...
+**podman machine inspect** [*options*] *name* ...
 
 ## DESCRIPTION
 
@@ -12,6 +12,8 @@ Inspect one or more virtual machines
 
 Obtain greater detail about Podman virtual machines.  More than one virtual machine can be
 inspected at once.
+
+Rootless only.
 
 ## OPTIONS
 #### **--format**

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"text/template"
@@ -77,7 +76,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		search.WaitWithDefaultTimeout()
 		Expect(search).Should(Exit(0))
 		Expect(len(search.OutputToStringArray())).To(BeNumerically(">", 1))
-		Expect(search.OutputToString()).To(ContainSubstring("docker.io/library/alpine"))
+		Expect(search.OutputToString()).To(ContainSubstring("alpine"))
 	})
 
 	It("podman search single registry flag", func() {
@@ -123,20 +122,20 @@ registries = ['{{.Host}}:{{.Port}}']`
 		contents := make([]entities.ImageSearchReport, 0)
 		err := json.Unmarshal(search.Out.Contents(), &contents)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(len(contents)).To(BeNumerically(">", 0), "No results from image search")
+		Expect(contents).ToNot(BeEmpty(), "No results from image search")
 		for _, element := range contents {
 			Expect(element.Description).ToNot(HaveSuffix("..."))
 		}
 	})
 
 	It("podman search format json list tags", func() {
-		search := podmanTest.Podman([]string{"search", "--list-tags", "--format", "json", "alpine"})
+		search := podmanTest.Podman([]string{"search", "--list-tags", "--format", "json", ALPINE})
 		search.WaitWithDefaultTimeout()
 		Expect(search).Should(Exit(0))
 		Expect(search.OutputToString()).To(BeValidJSON())
-		Expect(search.OutputToString()).To(ContainSubstring("docker.io/library/alpine"))
-		Expect(search.OutputToString()).To(ContainSubstring("3.10"))
-		Expect(search.OutputToString()).To(ContainSubstring("2.7"))
+		Expect(search.OutputToString()).To(ContainSubstring("quay.io/libpod/alpine"))
+		Expect(search.OutputToString()).To(ContainSubstring("3.10.2"))
+		Expect(search.OutputToString()).To(ContainSubstring("3.2"))
 	})
 
 	// Test for https://github.com/containers/podman/issues/11894
@@ -206,7 +205,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		port := GetPort()
 		fakereg := podmanTest.Podman([]string{"run", "-d", "--name", "registry",
 			"-p", fmt.Sprintf("%d:5000", port),
-			registry, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
+			REGISTRY_IMAGE, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
 		fakereg.WaitWithDefaultTimeout()
 		Expect(fakereg).Should(Exit(0))
 
@@ -231,7 +230,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		}
 		port := GetPort()
 		registry := podmanTest.Podman([]string{"run", "-d", "--name", "registry3",
-			"-p", fmt.Sprintf("%d:5000", port), registry,
+			"-p", fmt.Sprintf("%d:5000", port), REGISTRY_IMAGE,
 			"/entrypoint.sh", "/etc/docker/registry/config.yml"})
 		registry.WaitWithDefaultTimeout()
 		Expect(registry).Should(Exit(0))
@@ -256,7 +255,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		searchEmpty := podmanTest.Podman([]string{"search", fmt.Sprintf("%s/", ep.Address()), "--tls-verify=false"})
 		searchEmpty.WaitWithDefaultTimeout()
 		Expect(searchEmpty).Should(Exit(0))
-		Expect(len(searchEmpty.OutputToStringArray())).To(BeNumerically(">=", 1))
+		Expect(searchEmpty.OutputToStringArray()).ToNot(BeEmpty())
 		Expect(search.OutputToString()).To(ContainSubstring("my-alpine"))
 	})
 
@@ -268,7 +267,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		port := GetPort()
 		ep := endpoint{Port: fmt.Sprintf("%d", port), Host: "localhost"}
 		registry := podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d:5000", port),
-			"--name", "registry4", registry, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
+			"--name", "registry4", REGISTRY_IMAGE, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
 		registry.WaitWithDefaultTimeout()
 		Expect(registry).Should(Exit(0))
 
@@ -288,7 +287,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		err = registryFileTmpl.Execute(&buffer, ep)
 		Expect(err).ToNot(HaveOccurred())
 		podmanTest.setRegistriesConfigEnv(buffer.Bytes())
-		err = ioutil.WriteFile(fmt.Sprintf("%s/registry4.conf", tempdir), buffer.Bytes(), 0644)
+		err = os.WriteFile(fmt.Sprintf("%s/registry4.conf", tempdir), buffer.Bytes(), 0644)
 		Expect(err).ToNot(HaveOccurred())
 		if IsRemote() {
 			podmanTest.RestartRemoteService()
@@ -313,7 +312,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		port := GetPort()
 		ep := endpoint{Port: fmt.Sprintf("%d", port), Host: "localhost"}
 		registry := podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d:5000", port),
-			"--name", "registry5", registry})
+			"--name", "registry5", REGISTRY_IMAGE})
 		registry.WaitWithDefaultTimeout()
 		Expect(registry).Should(Exit(0))
 
@@ -332,7 +331,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		err = registryFileTmpl.Execute(&buffer, ep)
 		Expect(err).ToNot(HaveOccurred())
 		podmanTest.setRegistriesConfigEnv(buffer.Bytes())
-		err = ioutil.WriteFile(fmt.Sprintf("%s/registry5.conf", tempdir), buffer.Bytes(), 0644)
+		err = os.WriteFile(fmt.Sprintf("%s/registry5.conf", tempdir), buffer.Bytes(), 0644)
 		Expect(err).ToNot(HaveOccurred())
 
 		search := podmanTest.Podman([]string{"search", image, "--tls-verify=true"})
@@ -353,7 +352,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		port := GetPort()
 		ep := endpoint{Port: fmt.Sprintf("%d", port), Host: "localhost"}
 		registry := podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d:5000", port),
-			"--name", "registry6", registry})
+			"--name", "registry6", REGISTRY_IMAGE})
 		registry.WaitWithDefaultTimeout()
 		Expect(registry).Should(Exit(0))
 
@@ -372,7 +371,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		err = registryFileBadTmpl.Execute(&buffer, ep)
 		Expect(err).ToNot(HaveOccurred())
 		podmanTest.setRegistriesConfigEnv(buffer.Bytes())
-		err = ioutil.WriteFile(fmt.Sprintf("%s/registry6.conf", tempdir), buffer.Bytes(), 0644)
+		err = os.WriteFile(fmt.Sprintf("%s/registry6.conf", tempdir), buffer.Bytes(), 0644)
 		Expect(err).ToNot(HaveOccurred())
 
 		if IsRemote() {
@@ -401,7 +400,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		ep3 := endpoint{Port: fmt.Sprintf("%d", port3), Host: "localhost"}
 
 		registryLocal := podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d", port1),
-			"--name", "registry7", registry})
+			"--name", "registry7", REGISTRY_IMAGE})
 		registryLocal.WaitWithDefaultTimeout()
 		Expect(registryLocal).Should(Exit(0))
 
@@ -409,7 +408,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 			Fail("Cannot start docker registry on port %s", port1)
 		}
 
-		registryLocal = podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d:5000", port2), "--name", "registry8", registry})
+		registryLocal = podmanTest.Podman([]string{"run", "-d", "-p", fmt.Sprintf("%d:5000", port2), "--name", "registry8", REGISTRY_IMAGE})
 		registryLocal.WaitWithDefaultTimeout()
 		Expect(registryLocal).Should(Exit(0))
 
@@ -428,7 +427,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 		err = registryFileTwoTmpl.Execute(&buffer, ep3)
 		Expect(err).ToNot(HaveOccurred())
 		podmanTest.setRegistriesConfigEnv(buffer.Bytes())
-		err = ioutil.WriteFile(fmt.Sprintf("%s/registry8.conf", tempdir), buffer.Bytes(), 0644)
+		err = os.WriteFile(fmt.Sprintf("%s/registry8.conf", tempdir), buffer.Bytes(), 0644)
 		Expect(err).ToNot(HaveOccurred())
 
 		if IsRemote() {
@@ -455,7 +454,7 @@ registries = ['{{.Host}}:{{.Port}}']`
 	})
 
 	It("podman search with wildcards", func() {
-		search := podmanTest.Podman([]string{"search", "registry.redhat.io/*openshift*"})
+		search := podmanTest.Podman([]string{"search", "registry.access.redhat.com/*openshift*"})
 		search.WaitWithDefaultTimeout()
 		Expect(search).Should(Exit(0))
 		Expect(len(search.OutputToStringArray())).To(BeNumerically(">", 1))

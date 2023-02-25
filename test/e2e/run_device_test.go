@@ -1,14 +1,29 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
 )
+
+func createContainersConfFileWithDevices(pTest *PodmanTestIntegration, devices string) {
+	configPath := filepath.Join(pTest.TempDir, "containers.conf")
+	containersConf := []byte(fmt.Sprintf("[containers]\ndevices = [%s]\n", devices))
+	err := os.WriteFile(configPath, containersConf, os.ModePerm)
+	Expect(err).ToNot(HaveOccurred())
+
+	// Set custom containers.conf file
+	os.Setenv("CONTAINERS_CONF", configPath)
+	if IsRemote() {
+		pTest.RestartRemoteService()
+	}
+}
 
 var _ = Describe("Podman run device", func() {
 	var (
@@ -30,7 +45,7 @@ var _ = Describe("Podman run device", func() {
 		podmanTest.Cleanup()
 		f := CurrentGinkgoTestDescription()
 		processTestResult(f)
-
+		os.Unsetenv("CONTAINERS_CONF")
 	})
 
 	It("podman run bad device test", func() {
@@ -78,7 +93,7 @@ var _ = Describe("Podman run device", func() {
 
 	It("podman run device host device and container device parameter are directories", func() {
 		SkipIfRootless("Cannot create devices in /dev in rootless mode")
-		Expect(os.MkdirAll("/dev/foodevdir", os.ModePerm)).To(BeNil())
+		Expect(os.MkdirAll("/dev/foodevdir", os.ModePerm)).To(Succeed())
 		defer os.RemoveAll("/dev/foodevdir")
 
 		mknod := SystemExec("mknod", []string{"/dev/foodevdir/null", "c", "1", "3"})
@@ -105,15 +120,20 @@ var _ = Describe("Podman run device", func() {
 		SkipIfRootless("Rootless will not be able to create files/folders in /etc")
 		cdiDir := "/etc/cdi"
 		if _, err := os.Stat(cdiDir); os.IsNotExist(err) {
-			Expect(os.MkdirAll(cdiDir, os.ModePerm)).To(BeNil())
+			Expect(os.MkdirAll(cdiDir, os.ModePerm)).To(Succeed())
 		}
 		defer os.RemoveAll(cdiDir)
 
 		cmd := exec.Command("cp", "cdi/device.json", cdiDir)
 		err = cmd.Run()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", "--device", "vendor.com/device=myKmsg", ALPINE, "test", "-c", "/dev/kmsg1"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		createContainersConfFileWithDevices(podmanTest, "\"vendor.com/device=myKmsg\"")
+		session = podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", ALPINE, "test", "-c", "/dev/kmsg1"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})

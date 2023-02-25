@@ -24,7 +24,7 @@ func TestParseSignal(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Case doesnt matter",
+			name: "Case does not matter",
 			args: args{
 				rawSignal: "kIlL",
 			},
@@ -114,6 +114,55 @@ func TestParseSignalNameOrNumber(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("ParseSignalNameOrNumber() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseSysSignalToName(t *testing.T) {
+	type args struct {
+		signal syscall.Signal
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "Kill should work",
+			args: args{
+				signal: syscall.SIGKILL,
+			},
+			want:    "KILL",
+			wantErr: false,
+		},
+		{
+			name: "Non-defined signal number should not work",
+			args: args{
+				signal: 923,
+			},
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name: "garbage should fail",
+			args: args{
+				signal: -1,
+			},
+			want:    "",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseSysSignalToName(tt.args.signal)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseSysSignalToName() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseSysSignalToName() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

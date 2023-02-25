@@ -1,4 +1,4 @@
-![PODMAN logo](../../logo/podman-logo-source.svg)
+![PODMAN logo](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 
 # Basic Setup and Use of Podman
 Podman is a utility provided as part of the libpod library.  It can be used to create and maintain
@@ -13,7 +13,7 @@ root escalation is required.
 
 ## Installing Podman
 
-For installing or building Podman, please see the [installation instructions](https://github.com/containers/podman/blob/main/install.md).
+For installing or building Podman, please see the [installation instructions](https://podman.io/getting-started/installation).
 
 ## Familiarizing yourself with Podman
 
@@ -142,7 +142,7 @@ podman rm --latest
 You can verify the deletion of the container by running *podman ps -a*.
 
 ## Integration Tests
-For more information on how to setup and run the integration tests in your environment, checkout the Integration Tests [README.md](../../test/README.md)
+For more information on how to set up and run the integration tests in your environment, checkout the Integration Tests [README.md](../../test/README.md)
 
 ## More information
 

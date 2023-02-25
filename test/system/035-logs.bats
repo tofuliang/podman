@@ -36,13 +36,28 @@ function _log_test_tail() {
     run_podman run -d --log-driver=$driver $IMAGE sh -c "echo test1; echo test2"
     cid="$output"
 
-    run_podman logs --tail 1 $cid
-    is "$output" "test2"  "logs should only show last line"
+    run_podman wait $cid
+    run_podman logs --tail 1 --timestamps $cid
+    log1="$output"
+    assert "$log1" =~ "^[0-9-]+T[0-9:.]+([\+-][0-9:]+|Z) test2" \
+           "logs should only show last line"
+
+    # Sigh. I hate doing this, but podman-remote --timestamp only has 1-second
+    # resolution (regular podman has sub-second). For the timestamps-differ
+    # check below, we need to force a different second.
+    if is_remote; then
+        sleep 2
+    fi
 
     run_podman restart $cid
+    run_podman wait $cid
 
-    run_podman logs --tail 1 $cid
-    is "$output" "test2"  "logs should only show last line after restart"
+    run_podman logs -t --tail 1 $cid
+    log2="$output"
+    assert "$log2" =~ "^[0-9-]+T[0-9:.]+([\+-][0-9:]+|Z) test2" \
+           "logs, after restart, shows only last line"
+
+    assert "$log2" != "$log1" "log timestamps should differ"
 
     run_podman rm $cid
 }
@@ -99,7 +114,7 @@ function _log_test_multi() {
     doit c2 "sleep 1;echo b;sleep  2;echo c;sleep 3"
 
     run_podman ${events_backend} logs -f c1 c2
-    is "$output" \
+    assert "$output" =~ \
        "${cid[0]} a$etc
 ${cid[1]} b$etc
 ${cid[1]} c$etc
@@ -120,11 +135,14 @@ ${cid[0]} d"   "Sequential output from logs"
 function _log_test_restarted() {
     local driver=$1
     local events_backend=$(_additional_events_backend $driver)
+    if [[ -n "${events_backend}" ]]; then
+        skip_if_remote "remote does not support --events-backend"
+    fi
     run_podman run --log-driver=$driver ${events_backend} --name logtest $IMAGE sh -c 'start=0; if test -s log; then start=`tail -n 1 log`; fi; seq `expr $start + 1` `expr $start + 10` | tee -a log'
     # FIXME: #9597
     # run/start is flaking for remote so let's wait for the container condition
     # to stop wasting energy until the root cause gets fixed.
-    run_podman container wait --condition=exited logtest
+    run_podman container wait --condition=exited --condition=stopped logtest
     run_podman ${events_backend} start -a logtest
     logfile=$(mktemp -p ${PODMAN_TMPDIR} logfileXXXXXXXX)
     $PODMAN $_PODMAN_TEST_OPTS ${events_backend} logs -f logtest > $logfile
@@ -265,7 +283,7 @@ function _log_test_follow() {
     run_podman ${events_backend} logs -f $cname
     is "$output" "$contentA
 $contentB
-$contentC" "logs -f on exitted container works"
+$contentC" "logs -f on exited container works"
 
     run_podman ${events_backend} rm -t 0 -f $cname
 }
@@ -279,5 +297,92 @@ $contentC" "logs -f on exitted container works"
     skip_if_journald_unavailable
 
     _log_test_follow journald
+}
+
+function _log_test_follow_since() {
+    local driver=$1
+    cname=$(random_string)
+    content=$(random_string)
+    local events_backend=$(_additional_events_backend $driver)
+
+    if [[ -n "${events_backend}" ]]; then
+        skip_if_remote "remote does not support --events-backend"
+    fi
+
+    run_podman ${events_backend} run --log-driver=$driver --name $cname $IMAGE echo "$content"
+    # Using --since 0s can flake because the log might written in the second as the logs call is made.
+    # The -1s makes sure we only read logs that would be created 1s in the future which cannot happen.
+    run_podman ${events_backend} logs --since -1s -f $cname
+    assert "$output" == "" "logs --since -f on exited container works"
+
+    run_podman ${events_backend} rm -t 0 -f $cname
+
+    # Now do the same with a running container to check #16950.
+    run_podman ${events_backend} run --log-driver=$driver --name $cname -d $IMAGE \
+        sh -c "sleep 0.5; while :; do echo $content && sleep 3; done"
+
+    # sleep is required to make sure the podman event backend no longer sees the start event in the log
+    # This value must be greater or equal than the the value given in --since below
+    sleep 0.2
+
+    # Make sure podman logs actually follows by giving a low timeout and check that the command times out
+    PODMAN_TIMEOUT=2 run_podman 124 ${events_backend} logs --since 0.1s -f $cname
+    assert "$output" =~ "^$content
+timeout: sending signal TERM to command.*" "logs --since -f on running container works"
+
+    run_podman ${events_backend} rm -t 0 -f $cname
+}
+
+@test "podman logs - --since --follow k8s-file" {
+    _log_test_follow_since k8s-file
+}
+
+@test "podman logs - --since --follow journald" {
+    # We can't use journald on RHEL as rootless: rhbz#1895105
+    skip_if_journald_unavailable
+
+    _log_test_follow_since journald
+}
+
+function _log_test_follow_until() {
+    local driver=$1
+    cname=$(random_string)
+    content=$(random_string)
+    local events_backend=$(_additional_events_backend $driver)
+
+    if [[ -n "${events_backend}" ]]; then
+        skip_if_remote "remote does not support --events-backend"
+    fi
+
+    run_podman ${events_backend} run --log-driver=$driver --name $cname -d $IMAGE \
+        sh -c "n=1;while :; do echo $content--\$n; n=\$((n+1));sleep 1; done"
+
+    t0=$SECONDS
+    # The logs command should exit after the until time even when follow is set
+    PODMAN_TIMEOUT=10 run_podman ${events_backend} logs --until 3s -f $cname
+    t1=$SECONDS
+    logs_seen="$output"
+
+    # The delta should be 3 but because it could be a bit longer on a slow system such as CI we also accept 4.
+    delta_t=$(( $t1 - $t0 ))
+    assert $delta_t -gt 2 "podman logs --until: exited too early!"
+    assert $delta_t -lt 5 "podman logs --until: exited too late!"
+
+    # Impossible to know how many lines we'll see, but require at least two
+    assert "$logs_seen" =~ "$content--1
+$content--2.*" "logs --until -f on running container works"
+
+    run_podman ${events_backend} rm -t 0 -f $cname
+}
+
+@test "podman logs - --until --follow k8s-file" {
+    _log_test_follow_until k8s-file
+}
+
+@test "podman logs - --until --follow journald" {
+    # We can't use journald on RHEL as rootless: rhbz#1895105
+    skip_if_journald_unavailable
+
+    _log_test_follow_until journald
 }
 # vim: filetype=sh

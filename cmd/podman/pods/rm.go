@@ -2,7 +2,9 @@ package pods
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
@@ -13,7 +15,6 @@ import (
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/specgenutil"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -72,29 +73,47 @@ func init() {
 }
 
 func rm(cmd *cobra.Command, args []string) error {
-	ids, err := specgenutil.ReadPodIDFiles(rmOptions.PodIDFiles)
-	if err != nil {
-		return err
-	}
-	args = append(args, ids...)
+	var errs utils.OutputErrors
+
 	if cmd.Flag("time").Changed {
 		if !rmOptions.Force {
 			return errors.New("--force option must be specified to use the --time option")
 		}
 		rmOptions.Timeout = &stopTimeout
 	}
-	return removePods(args, rmOptions.PodRmOptions, true)
+
+	errs = append(errs, removePods(args, rmOptions.PodRmOptions, true)...)
+
+	for _, idFile := range rmOptions.PodIDFiles {
+		id, err := specgenutil.ReadPodIDFile(idFile)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rmErrs := removePods([]string{id}, rmOptions.PodRmOptions, true)
+		errs = append(errs, rmErrs...)
+		if len(rmErrs) == 0 {
+			if err := os.Remove(idFile); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	return errs.PrintErrors()
 }
 
 // removePods removes the specified pods (names or IDs).  Allows for sharing
 // pod-removal logic across commands.
-func removePods(namesOrIDs []string, rmOptions entities.PodRmOptions, printIDs bool) error {
+func removePods(namesOrIDs []string, rmOptions entities.PodRmOptions, printIDs bool) utils.OutputErrors {
 	var errs utils.OutputErrors
 
 	responses, err := registry.ContainerEngine().PodRm(context.Background(), namesOrIDs, rmOptions)
 	if err != nil {
+		if rmOptions.Force && strings.Contains(err.Error(), define.ErrNoSuchPod.Error()) {
+			return nil
+		}
 		setExitCode(err)
-		return err
+		return append(errs, err)
 	}
 
 	// in the cli, first we print out all the successful attempts
@@ -104,19 +123,18 @@ func removePods(namesOrIDs []string, rmOptions entities.PodRmOptions, printIDs b
 				fmt.Println(r.Id)
 			}
 		} else {
+			if rmOptions.Force && strings.Contains(r.Err.Error(), define.ErrNoSuchPod.Error()) {
+				continue
+			}
 			setExitCode(r.Err)
 			errs = append(errs, r.Err)
 		}
 	}
-	return errs.PrintErrors()
+	return errs
 }
 
 func setExitCode(err error) {
-	cause := errors.Cause(err)
-	switch {
-	case cause == define.ErrNoSuchPod:
-		registry.SetExitCode(1)
-	case strings.Contains(cause.Error(), define.ErrNoSuchPod.Error()):
+	if errors.Is(err, define.ErrNoSuchPod) || strings.Contains(err.Error(), define.ErrNoSuchPod.Error()) {
 		registry.SetExitCode(1)
 	}
 }

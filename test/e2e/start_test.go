@@ -1,7 +1,7 @@
 package integration
 
 import (
-	"io/ioutil"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -99,23 +99,6 @@ var _ = Describe("Podman start", func() {
 		Expect(session.OutputToString()).To(Equal(shortID))
 	})
 
-	It("podman container start single container by short id", func() {
-		session := podmanTest.Podman([]string{"container", "create", ALPINE, "ls"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		cid := session.OutputToString()
-		shortID := cid[0:10]
-		session = podmanTest.Podman([]string{"container", "start", shortID})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(Equal(shortID))
-
-		session = podmanTest.Podman([]string{"stop", shortID})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(Equal(shortID))
-	})
-
 	It("podman start single container by name", func() {
 		name := "foobar99"
 		session := podmanTest.Podman([]string{"create", "--name", name, ALPINE, "ls"})
@@ -124,9 +107,6 @@ var _ = Describe("Podman start", func() {
 		session = podmanTest.Podman([]string{"start", name})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		if podmanTest.RemoteTest {
-			Skip("Container-start name check doesn't work on remote client. It always returns the full ID.")
-		}
 		Expect(session.OutputToString()).To(Equal(name))
 	})
 
@@ -223,12 +203,50 @@ var _ = Describe("Podman start", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		readFirstLine := func(path string) string {
-			content, err := ioutil.ReadFile(path)
-			Expect(err).To(BeNil())
+			content, err := os.ReadFile(path)
+			Expect(err).ToNot(HaveOccurred())
 			return strings.Split(string(content), "\n")[0]
 		}
 		containerPID := readFirstLine(pidfile)
 		_, err = strconv.Atoi(containerPID) // Make sure it's a proper integer
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("podman start container --filter", func() {
+		session1 := podmanTest.Podman([]string{"container", "create", ALPINE})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		cid1 := session1.OutputToString()
+
+		session1 = podmanTest.Podman([]string{"container", "create", ALPINE})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		cid2 := session1.OutputToString()
+
+		session1 = podmanTest.Podman([]string{"container", "create", ALPINE})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		cid3 := session1.OutputToString()
+		shortCid3 := cid3[0:5]
+
+		session1 = podmanTest.Podman([]string{"start", cid1, "-f", "status=running"})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		Expect(session1.OutputToString()).To(HaveLen(0))
+
+		session1 = podmanTest.Podman([]string{"start", "--all", "--filter", fmt.Sprintf("id=%swrongid", shortCid3)})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		Expect(session1.OutputToString()).To(HaveLen(0))
+
+		session1 = podmanTest.Podman([]string{"start", "--all", "--filter", fmt.Sprintf("id=%s", shortCid3)})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		Expect(session1.OutputToString()).To(BeEquivalentTo(cid3))
+
+		session1 = podmanTest.Podman([]string{"start", "-f", fmt.Sprintf("id=%s", cid2)})
+		session1.WaitWithDefaultTimeout()
+		Expect(session1).Should(Exit(0))
+		Expect(session1.OutputToString()).To(BeEquivalentTo(cid2))
 	})
 })

@@ -21,7 +21,7 @@ func NewContainerEngine(facts *entities.PodmanConfig) (entities.ContainerEngine,
 		r, err := NewLibpodRuntime(facts.FlagSet, facts)
 		return r, err
 	case entities.TunnelMode:
-		ctx, err := bindings.NewConnectionWithIdentity(context.Background(), facts.URI, facts.Identity)
+		ctx, err := bindings.NewConnectionWithIdentity(context.Background(), facts.URI, facts.Identity, facts.MachineMode)
 		return &tunnel.ContainerEngine{ClientCtx: ctx}, err
 	}
 	return nil, fmt.Errorf("runtime mode '%v' is not supported", facts.EngineMode)
@@ -35,7 +35,7 @@ func NewImageEngine(facts *entities.PodmanConfig) (entities.ImageEngine, error) 
 		return r, err
 	case entities.TunnelMode:
 		// TODO: look at me!
-		ctx, err := bindings.NewConnectionWithIdentity(context.Background(), facts.URI, facts.Identity)
+		ctx, err := bindings.NewConnectionWithIdentity(context.Background(), facts.URI, facts.Identity, facts.MachineMode)
 		return &tunnel.ImageEngine{ClientCtx: ctx}, err
 	}
 	return nil, fmt.Errorf("runtime mode '%v' is not supported", facts.EngineMode)
@@ -53,7 +53,7 @@ func NewSystemEngine(setup entities.EngineSetup, facts *entities.PodmanConfig) (
 		case entities.RenumberMode:
 			r, err = GetRuntimeRenumber(context.Background(), facts.FlagSet, facts)
 		case entities.ResetMode:
-			r, err = GetRuntimeRenumber(context.Background(), facts.FlagSet, facts)
+			r, err = GetRuntimeReset(context.Background(), facts.FlagSet, facts)
 		case entities.MigrateMode:
 			name, flagErr := facts.FlagSet.GetString("new-runtime")
 			if flagErr != nil {

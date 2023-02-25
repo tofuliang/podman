@@ -45,7 +45,7 @@ var _ = Describe("Podman pull", func() {
 		Expect(session).Should(Exit(125))
 		expectedError := "initializing source docker://ibetthisdoesnotexistfr:random"
 		found, _ := session.ErrorGrepString(expectedError)
-		Expect(found).To(Equal(true))
+		Expect(found).To(BeTrue())
 
 		session = podmanTest.Podman([]string{"rmi", "busybox:musl", "alpine", "quay.io/libpod/cirros", "testdigest_v2s2@sha256:755f4d90b3716e2bf57060d249e2cd61c9ac089b1233465c5c2cb2d7ee550fdb"})
 		session.WaitWithDefaultTimeout()
@@ -101,6 +101,15 @@ var _ = Describe("Podman pull", func() {
 
 	It("podman pull check all tags", func() {
 		session := podmanTest.Podman([]string{"pull", "--all-tags", "quay.io/libpod/testdigest_v2s2"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"images"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(len(session.OutputToStringArray())).To(BeNumerically(">=", 2), "Expected at least two images")
+
+		session = podmanTest.Podman([]string{"pull", "-a", "quay.io/libpod/testdigest_v2s2"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -256,7 +265,7 @@ var _ = Describe("Podman pull", func() {
 	It("podman pull from docker-archive", func() {
 		SkipIfRemote("podman-remote does not support pulling from docker-archive")
 
-		podmanTest.AddImageToRWStore(cirros)
+		podmanTest.AddImageToRWStore(CIRROS_IMAGE)
 		tarfn := filepath.Join(podmanTest.TempDir, "cirros.tar")
 		session := podmanTest.Podman([]string{"save", "-o", tarfn, "cirros"})
 		session.WaitWithDefaultTimeout()
@@ -280,7 +289,7 @@ var _ = Describe("Podman pull", func() {
 		Expect(session).Should(Exit(125))
 		expectedError := "Unexpected tar manifest.json: expected 1 item, got 2"
 		found, _ := session.ErrorGrepString(expectedError)
-		Expect(found).To(Equal(true))
+		Expect(found).To(BeTrue())
 
 		// Now pull _one_ image from a multi-image archive via the name
 		// and index syntax.
@@ -306,20 +315,20 @@ var _ = Describe("Podman pull", func() {
 		Expect(session).Should(Exit(125))
 		expectedError = "Tag \"foo.com/does/not/exist:latest\" not found"
 		found, _ = session.ErrorGrepString(expectedError)
-		Expect(found).To(Equal(true))
+		Expect(found).To(BeTrue())
 
 		session = podmanTest.Podman([]string{"pull", "docker-archive:./testdata/docker-two-images.tar.xz:@2"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(125))
 		expectedError = "Invalid source index @2, only 2 manifest items available"
 		found, _ = session.ErrorGrepString(expectedError)
-		Expect(found).To(Equal(true))
+		Expect(found).To(BeTrue())
 	})
 
 	It("podman pull from oci-archive", func() {
 		SkipIfRemote("podman-remote does not support pulling from oci-archive")
 
-		podmanTest.AddImageToRWStore(cirros)
+		podmanTest.AddImageToRWStore(CIRROS_IMAGE)
 		tarfn := filepath.Join(podmanTest.TempDir, "oci-cirrus.tar")
 		session := podmanTest.Podman([]string{"save", "--format", "oci-archive", "-o", tarfn, "cirros"})
 		session.WaitWithDefaultTimeout()
@@ -339,7 +348,7 @@ var _ = Describe("Podman pull", func() {
 	It("podman pull from local directory", func() {
 		SkipIfRemote("podman-remote does not support pulling from local directory")
 
-		podmanTest.AddImageToRWStore(cirros)
+		podmanTest.AddImageToRWStore(CIRROS_IMAGE)
 		dirpath := filepath.Join(podmanTest.TempDir, "cirros")
 		err = os.MkdirAll(dirpath, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
@@ -363,7 +372,7 @@ var _ = Describe("Podman pull", func() {
 	It("podman pull from local OCI directory", func() {
 		SkipIfRemote("podman-remote does not support pulling from OCI directory")
 
-		podmanTest.AddImageToRWStore(cirros)
+		podmanTest.AddImageToRWStore(CIRROS_IMAGE)
 		dirpath := filepath.Join(podmanTest.TempDir, "cirros")
 		err = os.MkdirAll(dirpath, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
@@ -536,4 +545,103 @@ var _ = Describe("Podman pull", func() {
 		Expect(data[0]).To(HaveField("Os", runtime.GOOS))
 		Expect(data[0]).To(HaveField("Architecture", "arm64"))
 	})
+
+	It("podman pull progress", func() {
+		session := podmanTest.Podman([]string{"pull", ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		output := session.ErrorToString()
+		Expect(output).To(ContainSubstring("Getting image source signatures"))
+		Expect(output).To(ContainSubstring("Copying blob "))
+
+		session = podmanTest.Podman([]string{"pull", "-q", ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.ErrorToString()).To(BeEmpty())
+	})
+
+	Describe("podman pull and decrypt", func() {
+
+		decryptionTestHelper := func(imgPath string) *PodmanSessionIntegration {
+			bitSize := 1024
+			keyFileName := filepath.Join(podmanTest.TempDir, "key")
+			publicKeyFileName, privateKeyFileName, err := WriteRSAKeyPair(keyFileName, bitSize)
+			Expect(err).ToNot(HaveOccurred())
+
+			wrongKeyFileName := filepath.Join(podmanTest.TempDir, "wrong_key")
+			_, wrongPrivateKeyFileName, err := WriteRSAKeyPair(wrongKeyFileName, bitSize)
+			Expect(err).ToNot(HaveOccurred())
+
+			session := podmanTest.Podman([]string{"push", "--encryption-key", "jwe:" + publicKeyFileName, "--tls-verify=false", "--remove-signatures", ALPINE, imgPath})
+			session.WaitWithDefaultTimeout()
+
+			session = podmanTest.Podman([]string{"rmi", ALPINE})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+
+			// Pulling encrypted image without key should fail
+			session = podmanTest.Podman([]string{"pull", imgPath})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(125))
+
+			// Pulling encrypted image with wrong key should fail
+			session = podmanTest.Podman([]string{"pull", "--decryption-key", wrongPrivateKeyFileName, imgPath})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(125))
+
+			// Pulling encrypted image with correct key should pass
+			session = podmanTest.Podman([]string{"pull", "--decryption-key", privateKeyFileName, imgPath})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+			session = podmanTest.Podman([]string{"images"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+
+			return session
+		}
+
+		It("From oci", func() {
+			SkipIfRemote("Remote pull neither supports oci transport, nor decryption")
+
+			podmanTest.AddImageToRWStore(ALPINE)
+
+			bbdir := filepath.Join(podmanTest.TempDir, "busybox-oci")
+			imgPath := fmt.Sprintf("oci:%s", bbdir)
+
+			session := decryptionTestHelper(imgPath)
+
+			Expect(session.LineInOutputContainsTag(filepath.Join("localhost", bbdir), "latest")).To(BeTrue())
+		})
+
+		It("From local registry", func() {
+			SkipIfRemote("Remote pull does not support decryption")
+
+			if podmanTest.Host.Arch == "ppc64le" {
+				Skip("No registry image for ppc64le")
+			}
+
+			podmanTest.AddImageToRWStore(ALPINE)
+
+			if isRootless() {
+				err := podmanTest.RestoreArtifact(REGISTRY_IMAGE)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			lock := GetPortLock("5000")
+			defer lock.Unlock()
+			session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", "5000:5000", REGISTRY_IMAGE, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+
+			if !WaitContainerReady(podmanTest, "registry", "listening on", 20, 1) {
+				Skip("Cannot start docker registry.")
+			}
+
+			imgPath := "localhost:5000/my-alpine"
+
+			session = decryptionTestHelper(imgPath)
+
+			Expect(session.LineInOutputContainsTag(imgPath, "latest")).To(BeTrue())
+		})
+	})
+
 })

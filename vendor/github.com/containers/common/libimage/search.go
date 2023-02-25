@@ -2,6 +2,7 @@ package libimage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/containers/image/v5/types"
 	"github.com/hashicorp/go-multierror"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"
 )
@@ -55,6 +55,19 @@ type SearchOptions struct {
 	NoTrunc bool
 	// Authfile is the path to the authentication file.
 	Authfile string
+	// Path to the certificates directory.
+	CertDirPath string
+	// Username to use when authenticating at a container registry.
+	Username string
+	// Password to use when authenticating at a container registry.
+	Password string
+	// Credentials is an alternative way to specify credentials in format
+	// "username[:password]".  Cannot be used in combination with
+	// Username/Password.
+	Credentials string
+	// IdentityToken is used to authenticate the user and get
+	// an access token for the registry.
+	IdentityToken string `json:"identitytoken,omitempty"`
 	// InsecureSkipTLSVerify allows to skip TLS verification.
 	InsecureSkipTLSVerify types.OptionalBool
 	// ListTags returns the search result with available tags
@@ -84,11 +97,11 @@ func ParseSearchFilter(filter []string) (*SearchFilter, error) {
 		switch arr[0] {
 		case define.SearchFilterStars:
 			if len(arr) < 2 {
-				return nil, errors.Errorf("invalid filter %q, should be stars=<value>", filter)
+				return nil, fmt.Errorf("invalid filter %q, should be stars=<value>", filter)
 			}
 			stars, err := strconv.Atoi(arr[1])
 			if err != nil {
-				return nil, errors.Wrapf(err, "incorrect value type for stars filter")
+				return nil, fmt.Errorf("incorrect value type for stars filter: %w", err)
 			}
 			sFilter.Stars = stars
 		case define.SearchFilterAutomated:
@@ -104,7 +117,7 @@ func ParseSearchFilter(filter []string) (*SearchFilter, error) {
 				sFilter.IsOfficial = types.OptionalBoolTrue
 			}
 		default:
-			return nil, errors.Errorf("invalid filter type %q", f)
+			return nil, fmt.Errorf("invalid filter type %q", f)
 		}
 	}
 	return sFilter, nil
@@ -202,6 +215,35 @@ func (r *Runtime) searchImageInRegistry(ctx context.Context, term, registry stri
 		sys.AuthFilePath = options.Authfile
 	}
 
+	if options.CertDirPath != "" {
+		sys.DockerCertPath = options.CertDirPath
+	}
+
+	authConf := &types.DockerAuthConfig{IdentityToken: options.IdentityToken}
+	if options.Username != "" {
+		if options.Credentials != "" {
+			return nil, errors.New("username/password cannot be used with credentials")
+		}
+		authConf.Username = options.Username
+		authConf.Password = options.Password
+	}
+
+	if options.Credentials != "" {
+		split := strings.SplitN(options.Credentials, ":", 2)
+		switch len(split) {
+		case 1:
+			authConf.Username = split[0]
+		default:
+			authConf.Username = split[0]
+			authConf.Password = split[1]
+		}
+	}
+	// We should set the authConf unless a token was set.  That's especially
+	// useful for Podman's remote API.
+	if options.IdentityToken != "" {
+		sys.DockerAuthConfig = authConf
+	}
+
 	if options.ListTags {
 		results, err := searchRepositoryTags(ctx, sys, registry, term, options)
 		if err != nil {
@@ -273,16 +315,16 @@ func searchRepositoryTags(ctx context.Context, sys *types.SystemContext, registr
 	dockerPrefix := "docker://"
 	imageRef, err := alltransports.ParseImageName(fmt.Sprintf("%s/%s", registry, term))
 	if err == nil && imageRef.Transport().Name() != registryTransport.Transport.Name() {
-		return nil, errors.Errorf("reference %q must be a docker reference", term)
+		return nil, fmt.Errorf("reference %q must be a docker reference", term)
 	} else if err != nil {
 		imageRef, err = alltransports.ParseImageName(fmt.Sprintf("%s%s", dockerPrefix, fmt.Sprintf("%s/%s", registry, term)))
 		if err != nil {
-			return nil, errors.Errorf("reference %q must be a docker reference", term)
+			return nil, fmt.Errorf("reference %q must be a docker reference", term)
 		}
 	}
 	tags, err := registryTransport.GetRepositoryTags(ctx, sys, imageRef)
 	if err != nil {
-		return nil, errors.Errorf("error getting repository tags: %v", err)
+		return nil, fmt.Errorf("getting repository tags: %v", err)
 	}
 	limit := searchMaxQueries
 	if len(tags) < limit {

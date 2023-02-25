@@ -19,22 +19,11 @@ set -eo pipefail
 # shellcheck source=contrib/cirrus/lib.sh
 source $(dirname $0)/lib.sh
 
-function _run_ext_svc() {
-    $SCRIPT_BASE/ext_svc_check.sh
-}
-
-function _run_automation() {
-    $SCRIPT_BASE/cirrus_yaml_test.py
-
-    req_env_vars CI DEST_BRANCH IMAGE_SUFFIX TEST_FLAVOR TEST_ENVIRON \
-                 PODBIN_NAME PRIV_NAME DISTRO_NV CONTAINER USER HOME \
-                 UID AUTOMATION_LIB_PATH SCRIPT_BASE OS_RELEASE_ID \
-                 CG_FS_TYPE
-    bigto ooe.sh dnf install -y ShellCheck  # small/quick addition
-    $SCRIPT_BASE/shellcheck.sh
-}
-
 function _run_validate() {
+    # TODO: aarch64 images need python3-devel installed
+    # https://github.com/containers/automation_images/issues/159
+    bigto ooe.sh dnf install -y python3-devel
+
     # git-validation tool fails if $EPOCH_TEST_COMMIT is empty
     # shellcheck disable=SC2154
     if [[ -n "$EPOCH_TEST_COMMIT" ]]; then
@@ -103,8 +92,11 @@ function _run_bud() {
 }
 
 function _run_bindings() {
+    # install ginkgo
+    make .install.ginkgo
+
     # shellcheck disable=SC2155
-    export PATH=$PATH:$GOSRC/hack
+    export PATH=$PATH:$GOSRC/hack:$GOSRC/test/tools/build
 
     # if logformatter sees this, it can link directly to failing source lines
     local gitcommit_magic=
@@ -112,11 +104,8 @@ function _run_bindings() {
         gitcommit_magic="/define.gitCommit=${GIT_COMMIT}"
     fi
 
-    # Subshell needed so logformatter will write output in cwd; if it runs in
-    # the subdir, .cirrus.yml will not find the html'ized log
-    (cd pkg/bindings/test && \
-         echo "$gitcommit_magic" && \
-         ginkgo -progress -trace -noColor -debug -timeout 30m -r -v) |& logformatter
+    (echo "$gitcommit_magic" && \
+        make testbindings) |& logformatter
 }
 
 function _run_docker-py() {
@@ -127,6 +116,12 @@ function _run_docker-py() {
 function _run_endpoint() {
     make test-binaries
     make endpoint
+}
+
+function _run_minikube() {
+    _bail_if_test_can_be_skipped test/minikube
+    msg "Testing  minikube."
+    bats test/minikube |& logformatter
 }
 
 exec_container() {
@@ -141,14 +136,17 @@ exec_container() {
 
     # Line-separated arguments which include shell-escaped special characters
     declare -a envargs
-    while read -r var_val; do
-        envargs+=("-e $var_val")
+    while read -r var; do
+        # Pass "-e VAR" on the command line, not "-e VAR=value". Podman can
+        # do a much better job of transmitting the value than we can,
+        # especially when value includes spaces.
+        envargs+=("-e" "$var")
     done <<<"$(passthrough_envars)"
 
     # VM Images and Container images are built using (nearly) identical operations.
     set -x
     # shellcheck disable=SC2154
-    exec podman run --rm --privileged --net=host --cgroupns=host \
+    exec bin/podman run --rm --privileged --net=host --cgroupns=host \
         -v `mktemp -d -p /var/tmp`:/tmp:Z \
         -v /dev/fuse:/dev/fuse \
         -v "$GOPATH:$GOPATH:Z" \
@@ -189,7 +187,7 @@ function _run_swagger() {
 
     # Swagger validation takes a significant amount of time
     msg "Pulling \$CTR_FQIN '$CTR_FQIN' (background process)"
-    podman pull --quiet $CTR_FQIN &
+    bin/podman pull --quiet $CTR_FQIN &
 
     cd $GOSRC
     make swagger
@@ -211,7 +209,7 @@ eof
 
     msg "Waiting for backgrounded podman pull to complete..."
     wait %%
-    podman run -it --rm --security-opt label=disable \
+    bin/podman run -it --rm --security-opt label=disable \
         --env-file=$envvarsfile \
         -v $GOSRC:$GOSRC:ro \
         --workdir $GOSRC \
@@ -219,31 +217,35 @@ eof
     rm -f $envvarsfile
 }
 
-function _run_consistency() {
-    make vendor
-    SUGGESTION="run 'make vendor' and commit all changes" ./hack/tree_status.sh
-    make generate-bindings
-    SUGGESTION="run 'make generate-bindings' and commit all changes" ./hack/tree_status.sh
-    make completions
-    SUGGESTION="run 'make completions' and commit all changes" ./hack/tree_status.sh
-}
-
 function _run_build() {
     # Ensure always start from clean-slate with all vendor modules downloaded
     make clean
     make vendor
     make podman-release  # includes podman, podman-remote, and docs
+
+    # Last-minute confirmation that we're testing the desired runtime.
+    # This Can't Possibly Fail™ in regular CI; only when updating VMs.
+    # $CI_DESIRED_RUNTIME must be defined in .cirrus.yml.
+    req_env_vars CI_DESIRED_RUNTIME
+    runtime=$(bin/podman info --format '{{.Host.OCIRuntime.Name}}')
+    # shellcheck disable=SC2154
+    if [[ "$runtime" != "$CI_DESIRED_RUNTIME" ]]; then
+        die "Built podman is using '$runtime'; this CI environment requires $CI_DESIRED_RUNTIME"
+    fi
+    msg "Built podman is using expected runtime='$runtime'"
 }
 
 function _run_altbuild() {
-    # We can skip all these steps for test-only PRs, but not doc-only ones
-    _bail_if_test_can_be_skipped docs
+    # Subsequent windows-based tasks require a build.  Var. defined in .cirrus.yml
+    # shellcheck disable=SC2154
+    if [[ ! "$ALT_NAME" =~ Windows ]]; then
+        # We can skip all these steps for test-only PRs, but not doc-only ones
+        _bail_if_test_can_be_skipped docs
+    fi
 
     local -a arches
     local arch
     req_env_vars ALT_NAME
-    # Defined in .cirrus.yml
-    # shellcheck disable=SC2154
     msg "Performing alternate build: $ALT_NAME"
     msg "************************************************************"
     set -x
@@ -273,12 +275,17 @@ function _run_altbuild() {
         *Windows*)
             make podman-remote-release-windows_amd64.zip
             make podman.msi
+            # TODO: Script is broken, see #17620 for possible fix.
+            # docs/version-check
             ;;
         *Without*)
             make build-no-cgo
             ;;
         *RPM*)
             make package
+            ;;
+        FreeBSD*Cross)
+            make bin/podman.cross.freebsd.amd64
             ;;
         Alt*Cross)
             arches=(\
@@ -312,10 +319,18 @@ function _run_release() {
     if [[ -n "$dev" ]]; then
         die "Releases must never contain '-dev' in output of 'podman info' ($dev)"
     fi
+
+    commit=$(bin/podman info --format='{{.Version.GitCommit}}' | tr -d '[:space:]')
+    if [[ -z "$commit" ]]; then
+        die "Releases must contain a non-empty Version.GitCommit in 'podman info'"
+    fi
     msg "All OK"
 }
 
 
+# ***WARNING*** ***WARNING*** ***WARNING*** ***WARNING***
+#    Please see gitlab comment in setup_environment.sh
+# ***WARNING*** ***WARNING*** ***WARNING*** ***WARNING***
 function _run_gitlab() {
     rootless_uid=$(id -u)
     systemctl enable --now --user podman.socket
@@ -367,8 +382,24 @@ dotest() {
         podman)  localremote="local" ;;
     esac
 
+    # We've had some oopsies where tests invoke 'podman' instead of
+    # /path/to/built/podman. Let's catch those.
+    sudo rm -f /usr/bin/podman /usr/bin/podman-remote
+    fallback_podman=$(type -p podman || true)
+    if [[ -n "$fallback_podman" ]]; then
+        die "Found fallback podman '$fallback_podman' in \$PATH; tests require none, as a guarantee that we're testing the right binary."
+    fi
+
     make ${localremote}${testsuite} PODMAN_SERVER_LOG=$PODMAN_SERVER_LOG \
         |& logformatter
+}
+
+_run_machine() {
+    # This environment is convenient for executing some benchmarking
+    localbenchmarks
+
+    # N/B: Can't use _bail_if_test_can_be_skipped here b/c content isn't under test/
+    make localmachine |& logformatter
 }
 
 # Optimization: will exit if the only PR diffs are under docs/ or tests/
@@ -391,6 +422,8 @@ function _bail_if_test_can_be_skipped() {
         return 0
     fi
 
+    # Defined by Cirrus-CI for all tasks
+    # shellcheck disable=SC2154
     head=$CIRRUS_CHANGE_IN_REPO
     base=$(git merge-base $DEST_BRANCH $head)
     diffs=$(git diff --name-only $base $head)
@@ -470,6 +503,12 @@ if [[ "$PRIV_NAME" == "rootless" ]] && [[ "$UID" -eq 0 ]]; then
     # Does not return!
 fi
 # else: not running rootless, do nothing special
+
+# Dump important package versions. Before 2022-11-16 this took place as
+# a separate .cirrus.yml step, but it really belongs here.
+$(dirname $0)/logcollector.sh packages
+msg "************************************************************"
+
 
 cd "${GOSRC}/"
 

@@ -28,3 +28,36 @@ systemctl() {
 journalctl() {
     command journalctl $_DASHUSER "$@"
 }
+
+systemd-run() {
+    command systemd-run $_DASHUSER "$@";
+}
+
+install_kube_template() {
+    # If running from a podman source directory, build and use the source
+    # version of the play-kube-@ unit file
+    unit_name="podman-kube@.service"
+    unit_file="contrib/systemd/system/${unit_name}"
+    if [[ -e ${unit_file}.in ]]; then
+        echo "# [Building & using $unit_name from source]" >&3
+        # Force regenerating unit file (existing one may have /usr/bin path)
+        rm -f $unit_file
+        BINDIR=$(dirname $PODMAN) make $unit_file
+        cp $unit_file $UNIT_DIR/$unit_name
+    fi
+}
+
+quadlet_to_service_name() {
+    local filename=$(basename -- "$1")
+    local extension="${filename##*.}"
+    local filename="${filename%.*}"
+    local suffix=""
+
+    if [ "$extension" == "volume" ]; then
+        suffix="-volume"
+    elif [ "$extension" == "network" ]; then
+        suffix="-network"
+    fi
+
+    echo "$filename$suffix.service"
+}

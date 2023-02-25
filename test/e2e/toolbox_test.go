@@ -35,7 +35,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/containers/podman/v4/pkg/rootless"
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -90,7 +89,7 @@ var _ = Describe("Toolbox-specific testing", func() {
 		var err error
 
 		err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlimit)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		fmt.Printf("Expected value: %d", rlimit.Max)
 
 		session = podmanTest.Podman([]string{"create", "--name", "test", "--ulimit", "host", ALPINE,
@@ -107,7 +106,7 @@ var _ = Describe("Toolbox-specific testing", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		containerHardLimit, err = strconv.Atoi(strings.Trim(session.OutputToString(), "\n"))
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		Expect(containerHardLimit).To(BeNumerically(">=", rlimit.Max))
 	})
 
@@ -128,11 +127,11 @@ var _ = Describe("Toolbox-specific testing", func() {
 		// ('1K-blocks') needs to be extracted manually.
 		cmd = exec.Command("df", "/dev/shm")
 		res, err := cmd.Output()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		lines := strings.SplitN(string(res), "\n", 2)
 		fields := strings.Fields(lines[len(lines)-1])
 		hostShmSize, err = strconv.Atoi(fields[1])
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session = podmanTest.Podman([]string{"create", "--name", "test", "--ipc=host", "--pid=host", ALPINE,
 			"sleep", "1000"})
@@ -150,7 +149,7 @@ var _ = Describe("Toolbox-specific testing", func() {
 		lines = session.OutputToStringArray()
 		fields = strings.Fields(lines[len(lines)-1])
 		containerShmSize, err = strconv.Atoi(fields[1])
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		// In some cases it may happen that the size of /dev/shm is not exactly
 		// equal. Therefore it's fine if there's a slight tolerance between the
@@ -173,16 +172,16 @@ var _ = Describe("Toolbox-specific testing", func() {
 		var err error
 
 		currentUser, err := user.Current()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		currentGroup, err := user.LookupGroupId(currentUser.Gid)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session = podmanTest.Podman([]string{"create", "--name", "test", "--userns=keep-id", ALPINE,
 			"sleep", "1000"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session = podmanTest.Podman([]string{"start", "test"})
 		session.WaitWithDefaultTimeout()
@@ -338,7 +337,7 @@ var _ = Describe("Toolbox-specific testing", func() {
 		var session *PodmanSessionIntegration
 
 		// These should be most of the switches that Toolbox uses to create a "toolbox" container
-		// https://github.com/containers/toolbox/blob/master/src/cmd/create.go
+		// https://github.com/containers/toolbox/blob/main/src/cmd/create.go
 		session = podmanTest.Podman([]string{"create",
 			"--log-driver", "k8s-file",
 			"--dns", "none",
@@ -374,14 +373,14 @@ var _ = Describe("Toolbox-specific testing", func() {
 		SkipIfNotRootless("only meaningful when run rootless")
 		var session *PodmanSessionIntegration
 		currentUser, err := user.Current()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session = podmanTest.Podman([]string{"run", "-v", fmt.Sprintf("%s:%s", currentUser.HomeDir, currentUser.HomeDir), "--userns=keep-id", fedoraToolbox, "sh", "-c", "echo $HOME"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring(currentUser.HomeDir))
 
-		if rootless.IsRootless() {
+		if isRootless() {
 			location := path.Dir(currentUser.HomeDir)
 			volumeArg := fmt.Sprintf("%s:%s", location, location)
 			session = podmanTest.Podman([]string{"run",

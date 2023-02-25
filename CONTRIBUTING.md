@@ -1,4 +1,4 @@
-![PODMAN logo](logo/podman-logo-source.svg)
+![PODMAN logo](https://raw.githubusercontent.com/containers/common/main/logos/podman-logo-full-vert.png)
 # Contributing to Podman
 
 We'd love to have you join the community! Below summarizes the processes
@@ -23,9 +23,13 @@ your scenario, or additional information, to the discussion. Or simply
 
 If you find a new issue with the project we'd love to hear about it! The most
 important aspect of a bug report is that it includes enough information for
-us to reproduce it. So, please include as much detail as possible and try
-to remove the extra stuff that doesn't really relate to the issue itself.
-The easier it is for us to reproduce it, the faster it'll be fixed!
+us to reproduce it. To make this easier, there are three types of issue
+templates you can use, if you have a bug to report, please use *Bug Report*
+template or if you have an idea to propose, please use the *Feature Request*
+template or if your issue is something else, please use the default template.
+Please include as much detail as possible and try to remove the extra stuff
+that doesn't really relate to the issue itself. The easier it is for us to
+reproduce it, the faster it'll be fixed!
 
 Please don't include any private/sensitive information in your issue!
 
@@ -42,7 +46,7 @@ the “In Progress” label be set and a member will do so for you.
 
 ## Contributing to Podman
 
-This section describes how to start a contribution to Podman.
+This section describes how to start a contribution to Podman. These instructions are geared towards using a Linux development machine, which is required for doing development on the podman backend. Check out these instructions for [building the podman client on MacOSX](./build_osx.md).
 
 ### Prepare your environment
 
@@ -70,7 +74,7 @@ $ cd $GOPATH/src/github.com/containers/podman
 
 ### Deal with make
 
-Podman use a Makefile to realize common action like building etc...
+Podman uses a Makefile to realize common actions like building etc...
 
 You can list available actions by using:
 ```shell
@@ -93,7 +97,14 @@ You need install some dependencies before building a binary.
 #### Fedora
 
   ```shell
-  $ sudo dnf install gpgme-devel libseccomp-devel.x86_64 libseccomp-devel.x86_64 systemd-devel
+  $ sudo dnf install gpgme-devel libseccomp-devel.x86_64 systemd-devel
+  $ export PKG_CONFIG_PATH="/usr/lib/pkgconfig"
+  ```
+
+#### Debian / Ubuntu
+
+  ```shell
+  $ sudo apt-get install -y libsystemd-dev libgpgme-dev libseccomp-dev
   $ export PKG_CONFIG_PATH="/usr/lib/pkgconfig"
   ```
 
@@ -103,8 +114,8 @@ To test your changes do `make binaries` to generate your binaries.
 
 Your binaries are created inside the `bin/` directory and you can test your changes:
 ```shell
-$ bin/podman -h
-bin/podman -h
+$ bin/podman --help
+bin/podman --help
 NAME:
    podman - manage pods and images
 
@@ -302,48 +313,6 @@ podman build -t gate -f contrib/gate/Dockerfile .
 
 ***N/B:*** **don't miss the dot (.) at the end, it's really important**
 
-#### Local use of gate container
-
-The gate container's entry-point executes 'make' by default, on a copy of
-the repository made at runtime.  This avoids the container changing or
-leaving build artifacts in your hosts working directory.  It also guarantees
-every execution is based upon pristine code provided from the host.
-
-Execution does not require any special permissions from the host. However,
-your Podman repository clone's root must be bind-mounted to the container at
-'/usr/src/libpod'.  The copy will be made into /var/tmp/go (`$GOSRC` in container)
-before running your make target.  For example, running `make lint` from a
-repository clone at $HOME/devel/podman could be done with the commands:
-
-```bash
-$ cd $HOME/devel/podman
-$ podman run -it --rm -v $PWD:/usr/src/libpod:ro \
-    --security-opt label=disable quay.io/libpod/gate:master \
-    lint
-```
-
-***N/B:*** Depending on your clone's git remotes-configuration,
-(esp. for `validate` and `lint` targets), you may also need to reference the
-commit which was your upstream fork-point.  Otherwise you may receive an error
-similar to:
-
-```
-fatal: Not a valid object name master
-Makefile:152: *** Required variable EPOCH_TEST_COMMIT value is undefined, whitespace, or empty.  Stop.
-```
-
-For example, assuming your have a remote called `upstream` running the
-validate target should be done like this:
-
-```bash
-$ cd $HOME/devel/podman
-$ git remote update upstream
-$ export EPOCH_TEST_COMMIT=$(git merge-base upstream/master HEAD)
-$ podman run -it --rm -e EPOCH_TEST_COMMIT -v $PWD:/usr/src/libpod:ro \
-    --security-opt label=disable quay.io/libpod/gate:master \
-    validate
-```
-
 ### Integration Tests
 
 Our primary means of performing integration testing for Podman is with the
@@ -353,7 +322,7 @@ between Ginkgo and the Go test framework.  Adequate test cases are expected to
 be provided with PRs.
 
 For details on how to run the tests for Podman in your test environment, see the
-Integration Tests [README.md](test/README.md).
+testing [README.md](test/README.md).
 
 ## Continuous Integration
 
@@ -370,7 +339,7 @@ branches, which you may occasionally see [red bars on the status graph
 .](https://cirrus-ci.com/github/containers/podman/master)
 
 When the graph shows mostly green bars on the right, it's a good indication
-the master branch is currently stable.  Alternating red/green bars is indicative
+the main branch is currently stable.  Alternating red/green bars is indicative
 of a testing "flake", and should be examined (anybody can do this):
 
 * *One or a small handful of tests, on a single task, (i.e. specific distro/version)

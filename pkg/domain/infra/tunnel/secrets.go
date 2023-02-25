@@ -2,19 +2,20 @@ package tunnel
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/containers/podman/v4/pkg/bindings/secrets"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/errorhandling"
-	"github.com/pkg/errors"
 )
 
 func (ic *ContainerEngine) SecretCreate(ctx context.Context, name string, reader io.Reader, options entities.SecretCreateOptions) (*entities.SecretCreateReport, error) {
 	opts := new(secrets.CreateOptions).
 		WithDriver(options.Driver).
 		WithDriverOpts(options.DriverOpts).
-		WithName(name)
+		WithName(name).
+		WithLabels(options.Labels)
 	created, err := secrets.Create(ic.ClientCtx, reader, opts)
 	if err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func (ic *ContainerEngine) SecretInspect(ctx context.Context, nameOrIDs []string
 				return nil, nil, err
 			}
 			if errModel.ResponseCode == 404 {
-				errs = append(errs, errors.Errorf("no such secret %q", name))
+				errs = append(errs, fmt.Errorf("no such secret %q", name))
 				continue
 			}
 			return nil, nil, err
@@ -73,7 +74,7 @@ func (ic *ContainerEngine) SecretRm(ctx context.Context, nameOrIDs []string, opt
 			}
 			if errModel.ResponseCode == 404 {
 				allRm = append(allRm, &entities.SecretRmReport{
-					Err: errors.Errorf("no secret with name or id %q: no such secret ", name),
+					Err: fmt.Errorf("no secret with name or id %q: no such secret ", name),
 					ID:  "",
 				})
 				continue

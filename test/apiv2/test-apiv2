@@ -62,7 +62,7 @@ clean_up_server() {
         podman rm -a
         podman rmi -af
 
-        stop_registry
+        stop_registry --cleanup
         stop_service
     fi
 }
@@ -87,6 +87,7 @@ trap err_handler ERR
 #########
 function die() {
     echo "$ME: $*" >&2
+    clean_up_server
     exit 1
 }
 
@@ -104,6 +105,22 @@ function is() {
         return
     fi
     _show_ok 0 "$testname" "$expect" "$actual"
+}
+
+############
+#  is_not  #  Simple disequality
+############
+function is_not() {
+    local actual=$1
+    local expect_not=$2
+    local testname=$3
+
+    if [ "$actual" != "$expect_not" ]; then
+        # On success, include expected value; this helps readers understand
+        _show_ok 1 "$testname!=$expect"
+        return
+    fi
+    _show_ok 0 "$testname" "!= $expect" "$actual"
 }
 
 ##########
@@ -129,7 +146,8 @@ function like() {
 ##############
 function _show_ok() {
     local ok=$1
-    local testname=$2
+    # Exec tests include control characters; filter them out
+    local testname=$(tr -d \\012 <<<"$2"|cat -vT)
 
     # If output is a tty, colorize pass/fail
     local red=
@@ -219,20 +237,33 @@ function jsonify() {
 function t() {
     local method=$1; shift
     local path=$1; shift
-    local curl_args
+    local -a curl_args
     local content_type="application/json"
 
     local testname="$method $path"
-    # POST requests may be followed by one or more key=value pairs.
+
+    # POST and PUT requests may be followed by one or more key=value pairs.
     # Slurp the command line until we see a 3-digit status code.
-    if [[ $method = "POST" ]]; then
+    if [[ $method = "POST" || $method == "PUT" || $method = "DELETE" ]]; then
         local -a post_args
+
+        if [[ $method = "POST" ]]; then
+            function _add_curl_args() { curl_args+=(--data-binary @$1); }
+        else
+            function _add_curl_args() { curl_args+=(--upload-file $1); }
+        fi
+
         for arg; do
             case "$arg" in
                 *=*)              post_args+=("$arg");
                                   shift;;
-                *.tar)            curl_args="--data-binary @$arg" ;
+                *.json)           _add_curl_args $arg;
+                                  content_type="application/json";
+                                  shift;;
+                *.tar)            _add_curl_args $arg;
                                   content_type="application/x-tar";
+                                  shift;;
+                *.yaml)           _add_curl_args $arg;
                                   shift;;
                 application/*)    content_type="$arg";
                                   shift;;
@@ -241,8 +272,8 @@ function t() {
             esac
         done
         if [[ -z "$curl_args" ]]; then
-            curl_args="-d $(jsonify ${post_args[@]})"
-            testname="$testname [$curl_args]"
+            curl_args=(-d $(jsonify ${post_args[*]}))
+            testname="$testname [${curl_args[*]}]"
         fi
     fi
 
@@ -269,7 +300,12 @@ function t() {
 
     # curl -X HEAD but without --head seems to wait for output anyway
     if [[ $method == "HEAD" ]]; then
-        curl_args="--head"
+        curl_args+=("--head")
+    fi
+
+    # If this is set, we're *expecting* curl to time out
+    if [[ -n "$APIV2_TEST_EXPECT_TIMEOUT" ]]; then
+        curl_args+=("-m" $APIV2_TEST_EXPECT_TIMEOUT)
     fi
 
     local expected_code=$1; shift
@@ -281,16 +317,26 @@ function t() {
     # -s = silent, but --write-out 'format' gives us important response data
     # The hairy "{ ...;rc=$?; } || :" lets us capture curl's exit code and
     # give a helpful diagnostic if it fails.
-    { response=$(curl -s -X $method ${curl_args}                 \
+    { response=$(curl -s -X $method "${curl_args[@]}"            \
                     -H "Content-type: $content_type"             \
                     --dump-header $WORKDIR/curl.headers.out      \
                     --write-out '%{http_code}^%{content_type}^%{time_total}' \
                     -o $WORKDIR/curl.result.out "$url"); rc=$?; } || :
 
+    # Special case: this means we *expect and want* a timeout
+    if [[ -n "$APIV2_TEST_EXPECT_TIMEOUT" ]]; then
+        # Hardcoded. See curl(1) for list of exit codes
+        if [[ $rc -eq 28 ]]; then
+            _show_ok 1 "$testname: curl timed out (expected)"
+        else
+            _show_ok 0 "$testname: expected curl to time out; it did not"
+        fi
+        return
+    fi
+
     # Any error from curl is instant bad news, from which we can't recover
     if [[ $rc -ne 0 ]]; then
-        echo "FATAL: curl failure ($rc) on $url - cannot continue" >&2
-        exit 1
+        die "curl failure ($rc) on $url - cannot continue. args=${curl_args[*]}"
     fi
 
     # Show returned headers (without trailing ^M or empty lines) in log file.
@@ -338,7 +384,7 @@ function t() {
 
     # Special case: if response code does not match, dump the response body
     # and skip all further subtests.
-    if [[ $actual_code != $expected_code ]]; then
+    if [[ "$actual_code" != "$expected_code" ]]; then
         echo -e "#  response: $output"
         for i; do
             _show_ok skip "$testname: $i # skip - wrong return code"
@@ -347,7 +393,13 @@ function t() {
     fi
 
     for i; do
-        if expr "$i" : "[^=~]\+=.*" >/dev/null; then
+        if expr "$i" : '[^\!]\+\!=.\+' >/dev/null; then
+            # Disequality on json field
+            json_field=$(expr "$i" : '\([^!]*\)!')
+            expect_not=$(expr "$i" : '[^\!]*\!=\(.*\)')
+            actual=$(jq -r "$json_field" <<<"$output")
+            is_not "$actual" "$expect_not" "$testname : $json_field"
+        elif expr "$i" : "[^=~]\+=.*" >/dev/null; then
             # Exact match on json field
             json_field=$(expr "$i" : "\([^=]*\)=")
             expect=$(expr "$i" : '[^=]*=\(.*\)')
@@ -380,11 +432,17 @@ function start_service() {
         die "Cannot start service on non-localhost ($HOST)"
     fi
 
-    echo "rootdir: "$WORKDIR
-    # Some tests use shortnames; force registry override to work around
-    # docker.io throttling.
-#    FIXME esm revisit pulling expected images re: shortnames caused tests to fail
-#    env CONTAINERS_REGISTRIES_CONF=$TESTS_DIR/../registries.conf
+    # FIXME: EXPERIMENTAL: 2022-06-13: podman rootless needs a namespace. If
+    # system-service is the first podman command run (as is the case in CI)
+    # this will happen as a fork-exec, where the parent podman creates the
+    # namespace and the child is the server. Then, when stop_service() kills
+    # the parent, the child (server) happily stays alive and ruins subsequent
+    # tests that try to restart service with different settings.
+    # Workaround: run an unshare to get namespaces initialized.
+    if [[ $(id -u) != 0 ]]; then
+        $PODMAN_BIN unshare true
+    fi
+
     $PODMAN_BIN \
         --root $WORKDIR/server_root --syslog=true \
         system service \
@@ -392,6 +450,7 @@ function start_service() {
         tcp:127.0.0.1:$PORT \
         &> $WORKDIR/server.log &
     service_pid=$!
+    echo "# started service, pid $service_pid"
 
     wait_for_port $HOST $PORT
 }
@@ -401,7 +460,14 @@ function stop_service() {
     if [[ -n $service_pid ]]; then
         kill $service_pid || :
         wait $service_pid || :
+        echo "# stopped service, pid $service_pid"
     fi
+    service_pid=
+
+    if { exec 3<> /dev/tcp/$HOST/$PORT; } &>/dev/null; then
+        echo "# WARNING: stop_service: Service still running on port $PORT"
+    fi
+
 }
 
 ####################
@@ -411,15 +477,17 @@ REGISTRY_PORT=
 REGISTRY_USERNAME=
 REGISTRY_PASSWORD=
 function start_registry() {
-    # We can be invoked multiple times, e.g. from different subtests, but
-    # let's assume that once started we only kill it at the end of tests.
+    # We can be called multiple times, but each time should start a new
+    # registry container with (possibly) different configuration. That
+    # means that all callers must be responsible for invoking stop_registry.
     if [[ -n "$REGISTRY_PORT" ]]; then
-        return
+        die "start_registry invoked twice in succession, without stop_registry"
     fi
 
+    # First arg is auth type (default: "none", but can also be "htpasswd")
+    local auth="${1:-none}"
+
     REGISTRY_PORT=$(random_port)
-    REGISTRY_USERNAME=u$(random_string 7)
-    REGISTRY_PASSWORD=p$(random_string 7)
 
     local REGDIR=$WORKDIR/registry
     local AUTHDIR=$REGDIR/auth
@@ -433,42 +501,65 @@ function start_registry() {
         podman ${PODMAN_REGISTRY_ARGS} pull $REGISTRY_IMAGE ||
         podman ${PODMAN_REGISTRY_ARGS} pull $REGISTRY_IMAGE
 
-    # Create a local cert and credentials
-    # FIXME: is there a hidden "--quiet" flag? This is too noisy.
-    openssl req -newkey rsa:4096 -nodes -sha256 \
-            -keyout $AUTHDIR/domain.key -x509 -days 2 \
-            -out $AUTHDIR/domain.crt \
-            -subj "/C=US/ST=Foo/L=Bar/O=Red Hat, Inc./CN=registry host certificate" \
-            -addext subjectAltName=DNS:localhost
-    htpasswd -Bbn ${REGISTRY_USERNAME} ${REGISTRY_PASSWORD} \
-             > $AUTHDIR/htpasswd
+    # Create a local cert (no need to do this more than once)
+    if [[ ! -e $AUTHDIR/domain.key ]]; then
+        # FIXME: is there a hidden "--quiet" flag? This is too noisy.
+        openssl req -newkey rsa:4096 -nodes -sha256 \
+                -keyout $AUTHDIR/domain.key -x509 -days 2 \
+                -out $AUTHDIR/domain.crt \
+                -subj "/C=US/ST=Foo/L=Bar/O=Red Hat, Inc./CN=registry host certificate" \
+                -addext subjectAltName=DNS:localhost
+    fi
+
+    # If invoked with auth=htpasswd, create credentials
+    REGISTRY_USERNAME=
+    REGISTRY_PASSWORD=
+    declare -a registry_auth_params=(-e "REGISTRY_AUTH=$auth")
+    if [[ "$auth" = "htpasswd" ]]; then
+        REGISTRY_USERNAME=u$(random_string 7)
+        REGISTRY_PASSWORD=p$(random_string 7)
+
+        htpasswd -Bbn ${REGISTRY_USERNAME} ${REGISTRY_PASSWORD} \
+                 > $AUTHDIR/htpasswd
+
+        registry_auth_params+=(
+            -e "REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm"
+            -e "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd"
+        )
+    fi
 
     # Run the registry, and wait for it to come up
     podman ${PODMAN_REGISTRY_ARGS} run -d \
            -p ${REGISTRY_PORT}:5000 \
            --name registry \
            -v $AUTHDIR:/auth:Z \
-           -e "REGISTRY_AUTH=htpasswd" \
-           -e "REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm" \
-           -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+           "${registry_auth_params[@]}" \
            -e REGISTRY_HTTP_TLS_CERTIFICATE=/auth/domain.crt \
            -e REGISTRY_HTTP_TLS_KEY=/auth/domain.key \
            ${REGISTRY_IMAGE}
 
     wait_for_port localhost $REGISTRY_PORT 10
+    echo "# started registry (auth=$auth) on port $PORT"
 }
 
 function stop_registry() {
     local REGDIR=${WORKDIR}/registry
     if [[ -d $REGDIR ]]; then
         local OPTS="--root ${REGDIR}/root --runroot ${REGDIR}/runroot"
-        podman $OPTS stop -f -t 0 -a
+        podman $OPTS stop -i -t 0 registry
 
         # rm/rmi are important when running rootless: without them we
         # get EPERMS in tmpdir cleanup because files are owned by subuids.
-        podman $OPTS rm -f -a
-        podman $OPTS rmi -f -a
+        podman $OPTS rm -f -i registry
+        if [[ "$1" = "--cleanup" ]]; then
+            podman $OPTS rmi -f -a
+        fi
+        echo "# stopped registry on port $PORT"
     fi
+
+    REGISTRY_PORT=
+    REGISTRY_USERNAME=
+    REGISTRY_PASSWORD=
 }
 
 #################
@@ -580,11 +671,11 @@ echo -e "collected ${#tests_to_run[@]} items\n"
 
 start_service
 
-for i in ${tests_to_run[@]}; do
+for i in "${tests_to_run[@]}"; do
     TEST_CONTEXT="[$(basename $i .at)]"
 
     # Clear output from 'podman' helper
-    >| $WORKDIR/output.log
+    truncate --size=0 $WORKDIR/output.log
 
     source $i
 done

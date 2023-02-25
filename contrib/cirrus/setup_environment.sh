@@ -51,14 +51,18 @@ git config --system --add safe.directory $GOSRC
 echo -e "\n# Begin single-use VM global variables (${BASH_SOURCE[0]})" \
     > "/etc/ci_environment"
 (
-    while read -r env_var_val; do
-        echo "$env_var_val"
+    while read -r env_var; do
+        printf -- "%s=%q\n" "${env_var}" "${!env_var}"
     done <<<"$(passthrough_envars)"
 ) >> "/etc/ci_environment"
 
-# This is a possible manual maintenance gaff, check to be sure everything matches.
+# This is a possible manual maintenance gaff, i.e. forgetting to update a
+# *_NAME variable in .cirrus.yml.  check to be sure at least one comparison
+# matches the actual OS being run.  Ignore details, such as debian point-release
+# number and/or '-aarch64' suffix.
 # shellcheck disable=SC2154
-[[ "$DISTRO_NV" =~ $OS_REL_VER ]] || \
+grep -q "$DISTRO_NV" <<<"$OS_REL_VER" || \
+    grep -q "$OS_REL_VER" <<<"$DISTRO_NV" || \
     die "Automation spec. '$DISTRO_NV'; actual host '$OS_REL_VER'"
 
 # Only allow this script to execute once
@@ -71,27 +75,20 @@ fi
 
 cd "${GOSRC}/"
 
-# Defined by lib.sh: Does the host support cgroups v1 or v2
+# Defined by lib.sh: Does the host support cgroups v1 or v2? Use runc or crun
+# respectively.
+# **IMPORTANT**: $OCI_RUNTIME is a fakeout! It is used only in e2e tests.
+# For actual podman, as in system tests, we force runtime in containers.conf
 case "$CG_FS_TYPE" in
     tmpfs)
         if ((CONTAINER==0)); then
             warn "Forcing testing with runc instead of crun"
-            if [[ "$OS_RELEASE_ID" == "ubuntu" ]]; then
-                # Need b/c using cri-o-runc package from OBS
-                echo "OCI_RUNTIME=/usr/lib/cri-o-runc/sbin/runc" \
-                    >> /etc/ci_environment
-            else
-                echo "OCI_RUNTIME=runc" >> /etc/ci_environment
-            fi
+            echo "OCI_RUNTIME=runc" >> /etc/ci_environment
+            printf "[engine]\nruntime=\"runc\"\n" >>/etc/containers/containers.conf
         fi
         ;;
     cgroup2fs)
-        if ((CONTAINER==0)); then
-            # This is necessary since we've built/installed from source,
-            # which uses runc as the default.
-            warn "Forcing testing with crun instead of runc"
-            echo "OCI_RUNTIME=crun" >> /etc/ci_environment
-        fi
+        # Nothing to do: podman defaults to crun
         ;;
     *) die_unknown CG_FS_TYPE
 esac
@@ -99,40 +96,50 @@ esac
 if ((CONTAINER==0)); then  # Not yet running inside a container
     # Discovered reemergence of BFQ scheduler bug in kernel 5.8.12-200
     # which causes a kernel panic when system is under heavy I/O load.
-    # Previously discovered in F32beta and confirmed fixed. It's been
-    # observed in F31 kernels as well.  Deploy workaround for all VMs
-    # to ensure a more stable I/O scheduler (elevator).
-    echo "mq-deadline" > /sys/block/sda/queue/scheduler
-    warn "I/O scheduler: $(cat /sys/block/sda/queue/scheduler)"
+    # Disable the I/O scheduler (a.k.a. elevator) for all environments,
+    # leaving optimization up to underlying storage infrastructure.
+    testfs="/"  # mountpoint that experiences the most I/O during testing
+    msg "Querying block device owning partition hosting the '$testfs' filesystem"
+    # Need --nofsroot b/c btrfs appends subvolume label to `source` name
+    testdev=$(findmnt --canonicalize --noheadings --nofsroot \
+              --output source --mountpoint $testfs)
+    msg "    found partition: '$testdev'"
+    testdisk=$(lsblk --noheadings --output pkname --paths $testdev)
+    msg "    found block dev: '$testdisk'"
+    testsched="/sys/block/$(basename $testdisk)/queue/scheduler"
+    if [[ -n "$testdev" ]] && [[ -n "$testdisk" ]] && [[ -e "$testsched" ]]; then
+        msg "    Found active I/O scheduler: $(cat $testsched)"
+        if [[ ! "$(<$testsched)" =~ \[none\]  ]]; then
+            msg "    Disabling elevator for '$testsched'"
+            echo "none" > "$testsched"
+        else
+            msg "    Elevator already disabled"
+        fi
+    else
+        warn "Sys node for elevator doesn't exist: '$testsched'"
+    fi
 fi
 
 # Which distribution are we testing on.
 case "$OS_RELEASE_ID" in
-    ubuntu) ;;
+    debian) ;;
     fedora)
         if ((CONTAINER==0)); then
             # All SELinux distros need this for systemd-in-a-container
             msg "Enabling container_manage_cgroup"
             setsebool container_manage_cgroup true
         fi
-
-        # For release 36 and later, netavark/aardvark is the default
-        # networking stack for podman.  All previous releases only have
-        # CNI networking available.  Upgrading from one to the other is
-        # not supported at this time.  Support execution of the upgrade
-        # tests in F36 and later, by disabling Netavark and enabling CNI.
-        #
-        # OS_RELEASE_VER is defined by automation-library
-        # shellcheck disable=SC2154
-        if [[ "$OS_RELEASE_VER" -ge 36 ]] && \
-           [[ "$TEST_FLAVOR" != "upgrade_test" ]];
-        then
-            use_netavark
-        else # Fedora < 36, or upgrade testing.
-            use_cni
-        fi
         ;;
     *) die_unknown OS_RELEASE_ID
+esac
+
+# Networking: force CNI or Netavark as requested in .cirrus.yml
+# (this variable is mandatory).
+# shellcheck disable=SC2154
+case "$CI_DESIRED_NETWORK" in
+    netavark)   use_netavark ;;
+    cni)        use_cni ;;
+    *)          die_unknown CI_DESIRED_NETWORK ;;
 esac
 
 # Required to be defined by caller: The environment where primary testing happens
@@ -186,10 +193,12 @@ esac
 # Required to be defined by caller: Are we testing as root or a regular user
 case "$PRIV_NAME" in
     root)
-        if [[ "$TEST_FLAVOR" = "sys" ]]; then
+        # shellcheck disable=SC2154
+        if [[ "$TEST_FLAVOR" = "sys" || "$TEST_FLAVOR" = "apiv2" ]]; then
             # Used in local image-scp testing
             setup_rootless
             echo "PODMAN_ROOTLESS_USER=$ROOTLESS_USER" >> /etc/ci_environment
+            echo "PODMAN_ROOTLESS_UID=$ROOTLESS_UID" >> /etc/ci_environment
         fi
         ;;
     rootless)
@@ -201,8 +210,53 @@ case "$PRIV_NAME" in
     *) die_unknown PRIV_NAME
 esac
 
+# shellcheck disable=SC2154
 if [[ -n "$ROOTLESS_USER" ]]; then
     echo "ROOTLESS_USER=$ROOTLESS_USER" >> /etc/ci_environment
+    echo "ROOTLESS_UID=$ROOTLESS_UID" >> /etc/ci_environment
+fi
+
+# FIXME! experimental workaround for #16973, the "lookup cdn03.quay.io" flake.
+#
+# If you are reading this on or after April 2023:
+#   * If we're NOT seeing the cdn03 flake any more, well, someone
+#     should probably figure out how to fix systemd-resolved, then
+#     remove this workaround.
+#
+#   * If we're STILL seeing the cdn03 flake, well, this "fix"
+#     didn't work and should be removed.
+#
+# Either way, this block of code should be removed after March 31 2023
+# because it creates a system that is not representative of real-world Fedora.
+if ((CONTAINER==0)); then
+    nsswitch=/etc/authselect/nsswitch.conf
+    if [[ -e $nsswitch ]]; then
+        if grep -q -E 'hosts:.*resolve' $nsswitch; then
+            msg "Disabling systemd-resolved"
+            sed -i -e 's/^\(hosts: *\).*/\1files dns myhostname/' $nsswitch
+            systemctl stop systemd-resolved
+            rm -f /etc/resolv.conf
+
+            # NetworkManager may already be running, or it may not....
+            systemctl start NetworkManager
+            sleep 1
+            systemctl restart NetworkManager
+
+            # ...and it may create resolv.conf upon start/restart, or it
+            # may not. Keep restarting until it does. (Yes, I realize
+            # this is cargocult thinking. Don't care. Not worth the effort
+            # to diagnose and solve properly.)
+            retries=10
+            while ! test -e /etc/resolv.conf;do
+                retries=$((retries - 1))
+                if [[ $retries -eq 0 ]]; then
+                    die "Timed out waiting for resolv.conf"
+                fi
+                systemctl restart NetworkManager
+                sleep 5
+            done
+        fi
+    fi
 fi
 
 # Required to be defined by caller: Are we testing podman or podman-remote client
@@ -216,25 +270,20 @@ esac
 # Required to be defined by caller: The primary type of testing that will be performed
 # shellcheck disable=SC2154
 case "$TEST_FLAVOR" in
-    ext_svc) ;;
     validate)
         dnf install -y $PACKAGE_DOWNLOAD_DIR/python3*.rpm
         # For some reason, this is also needed for validation
-        make install.tools
-        make .install.pre-commit
+        make .install.pre-commit .install.gitvalidation
         ;;
-    automation) ;;
     altbuild)
         # Defined in .cirrus.yml
         # shellcheck disable=SC2154
         if [[ "$ALT_NAME" =~ RPM ]]; then
             bigto dnf install -y glibc-minimal-langpack go-rpm-macros rpkg rpm-build shadow-utils-subid-devel
         fi
-        make install.tools
         ;;
     docker-py)
         remove_packaged_podman_files
-        make install.tools
         make install PREFIX=/usr ETCDIR=/etc
 
         msg "Installing previously downloaded/cached packages"
@@ -246,16 +295,14 @@ case "$TEST_FLAVOR" in
         ;;
     build) make clean ;;
     unit)
-        make install.tools
+        make .install.ginkgo
         ;;
     compose_v2)
-        make install.tools
         dnf -y remove docker-compose
         curl -SL https://github.com/docker/compose/releases/download/v2.2.3/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
         chmod +x /usr/local/bin/docker-compose
         ;& # Continue with next item
     apiv2)
-        make install.tools
         msg "Installing previously downloaded/cached packages"
         dnf install -y $PACKAGE_DOWNLOAD_DIR/python3*.rpm
         virtualenv .venv/requests
@@ -265,15 +312,16 @@ case "$TEST_FLAVOR" in
         ;&  # continue with next item
     compose)
         make install.tools
-        rpm -ivh $PACKAGE_DOWNLOAD_DIR/podman-docker*
+        dnf install -y podman-docker*
         ;&  # continue with next item
-    int) ;&
+    int)
+        make .install.ginkgo
+        ;&
     sys) ;&
     upgrade_test) ;&
     bud) ;&
     bindings) ;&
     endpoint)
-        make install.tools
         # Use existing host bits when testing is to happen inside a container
         # since this script will run again in that environment.
         # shellcheck disable=SC2154
@@ -294,51 +342,22 @@ case "$TEST_FLAVOR" in
 
         install_test_configs
         ;;
-    gitlab)
-        # This only runs on Ubuntu for now
-        if [[ "$OS_RELEASE_ID" != "ubuntu" ]]; then
-            die "This test only runs on Ubuntu due to sheer laziness"
-        fi
-
-        # Ref: https://gitlab.com/gitlab-org/gitlab-runner/-/issues/27270#note_499585550
-
+    minikube)
+        dnf install -y $PACKAGE_DOWNLOAD_DIR/minikube-latest*
+        remove_packaged_podman_files
+        make install.tools
+        make install PREFIX=/usr ETCDIR=/etc
+        minikube config set driver podman
+        install_test_configs
+        ;;
+    machine)
+        dnf install -y podman-gvproxy*
         remove_packaged_podman_files
         make install PREFIX=/usr ETCDIR=/etc
-
-        msg "Installing docker and containerd"
-        # N/B: Tests check/expect `docker info` output, and this `!= podman info`
-        ooe.sh dpkg -i \
-            $PACKAGE_DOWNLOAD_DIR/containerd.io*.deb \
-            $PACKAGE_DOWNLOAD_DIR/docker-ce*.deb
-
-        msg "Disabling docker service and socket activation"
-        systemctl stop docker.service docker.socket
-        systemctl disable docker.service docker.socket
-        rm -rf /run/docker*
-        # Guarantee the docker daemon can't be started, even by accident
-        rm -vf $(type -P dockerd)
-
-        msg "Recursively chowning source to $ROOTLESS_USER"
-        chown -R $ROOTLESS_USER:$ROOTLESS_USER "$GOPATH" "$GOSRC"
-
-        msg "Obtaining necessary gitlab-runner testing bits"
-        slug="gitlab.com/gitlab-org/gitlab-runner"
-        helper_fqin="registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-latest-pwsh"
-        ssh="ssh $ROOTLESS_USER@localhost -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o CheckHostIP=no env GOPATH=$GOPATH"
-        showrun $ssh go get -u github.com/jstemmer/go-junit-report
-        showrun $ssh git clone https://$slug $GOPATH/src/$slug
-        showrun $ssh make -C $GOPATH/src/$slug development_setup
-        showrun $ssh bash -c "'cd $GOPATH/src/$slug && GOPATH=$GOPATH go get .'"
-
-        showrun $ssh podman pull $helper_fqin
-        # Tests expect image with this exact name
-        showrun $ssh podman tag $helper_fqin \
-            docker.io/gitlab/gitlab-runner-helper:x86_64-latest-pwsh
+        install_test_configs
         ;;
-    swagger) ;&  # use next item
-    consistency)
-        make clean
-        make install.tools
+    swagger)
+        make .install.swagger
         ;;
     release) ;;
     *) die_unknown TEST_FLAVOR

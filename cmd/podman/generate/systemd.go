@@ -1,7 +1,8 @@
-package pods
+package generate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +13,8 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/pkg/domain/entities"
+	envLib "github.com/containers/podman/v4/pkg/env"
 	systemDefine "github.com/containers/podman/v4/pkg/systemd/define"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -28,9 +29,11 @@ const (
 	wantsFlagName             = "wants"
 	afterFlagName             = "after"
 	requiresFlagName          = "requires"
+	envFlagName               = "env"
 )
 
 var (
+	envInput           []string
 	files              bool
 	format             string
 	systemdRestart     string
@@ -57,7 +60,7 @@ var (
 func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{
 		Command: systemdCmd,
-		Parent:  generateCmd,
+		Parent:  GenerateCmd,
 	})
 	flags := systemdCmd.Flags()
 	flags.BoolVarP(&systemdOptions.Name, "name", "n", false, "Use container/pod names instead of IDs")
@@ -109,6 +112,9 @@ func init() {
 	flags.StringArrayVar(&systemdOptions.Requires, requiresFlagName, nil, "Similar to wants, but declares stronger requirement dependencies")
 	_ = systemdCmd.RegisterFlagCompletionFunc(requiresFlagName, completion.AutocompleteNone)
 
+	flags.StringArrayVarP(&envInput, envFlagName, "e", nil, "Set environment variables to the systemd unit files")
+	_ = systemdCmd.RegisterFlagCompletionFunc(envFlagName, completion.AutocompleteNone)
+
 	flags.SetNormalizeFunc(utils.TimeoutAliasFlags)
 }
 
@@ -141,6 +147,13 @@ func systemd(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed(stopTimeoutCompatFlagName) {
 		setStopTimeout++
 	}
+	if cmd.Flags().Changed(envFlagName) {
+		cliEnv, err := envLib.ParseSlice(envInput)
+		if err != nil {
+			return fmt.Errorf("parsing environment variables: %w", err)
+		}
+		systemdOptions.AdditionalEnvVariables = envLib.Slice(cliEnv)
+	}
 	switch setStopTimeout {
 	case 1:
 		systemdOptions.StopTimeout = &stopTimeout
@@ -156,7 +169,7 @@ func systemd(cmd *cobra.Command, args []string) error {
 	if files {
 		cwd, err := os.Getwd()
 		if err != nil {
-			return errors.Wrap(err, "error getting current working directory")
+			return fmt.Errorf("getting current working directory: %w", err)
 		}
 		for name, content := range reports.Units {
 			path := filepath.Join(cwd, fmt.Sprintf("%s.service", name))
@@ -189,7 +202,7 @@ func systemd(cmd *cobra.Command, args []string) error {
 	case format == "":
 		return printDefault(reports.Units)
 	default:
-		return errors.Errorf("unknown --format argument: %s", format)
+		return fmt.Errorf("unknown --format argument: %s", format)
 	}
 }
 

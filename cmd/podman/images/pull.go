@@ -1,6 +1,7 @@
 package images
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +23,7 @@ type pullOptionsWrapper struct {
 	entities.ImagePullOptions
 	TLSVerifyCLI   bool // CLI only
 	CredentialsCLI string
+	DecryptionKeys []string
 }
 
 var (
@@ -77,7 +78,7 @@ func init() {
 func pullFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
 
-	flags.BoolVar(&pullOptions.AllTags, "all-tags", false, "All tagged images in the repository will be pulled")
+	flags.BoolVarP(&pullOptions.AllTags, "all-tags", "a", false, "All tagged images in the repository will be pulled")
 
 	credsFlagName := "creds"
 	flags.StringVar(&pullOptions.CredentialsCLI, credsFlagName, "", "`Credentials` (USERNAME:PASSWORD) to use for authenticating to a registry")
@@ -107,6 +108,13 @@ func pullFlags(cmd *cobra.Command) {
 	flags.StringVar(&pullOptions.Authfile, authfileFlagName, auth.GetDefaultAuthFile(), "Path of the authentication file. Use REGISTRY_AUTH_FILE environment variable to override")
 	_ = cmd.RegisterFlagCompletionFunc(authfileFlagName, completion.AutocompleteDefault)
 
+	decryptionKeysFlagName := "decryption-key"
+	flags.StringSliceVar(&pullOptions.DecryptionKeys, decryptionKeysFlagName, nil, "Key needed to decrypt the image (e.g. /path/to/key.pem)")
+	_ = cmd.RegisterFlagCompletionFunc(decryptionKeysFlagName, completion.AutocompleteDefault)
+
+	if registry.IsRemote() {
+		_ = flags.MarkHidden(decryptionKeysFlagName)
+	}
 	if !registry.IsRemote() {
 		certDirFlagName := "cert-dir"
 		flags.StringVar(&pullOptions.CertDir, certDirFlagName, "", "`Pathname` of a directory containing TLS certificates and keys")
@@ -138,7 +146,7 @@ func imagePull(cmd *cobra.Command, args []string) error {
 	}
 	if platform != "" {
 		if pullOptions.Arch != "" || pullOptions.OS != "" {
-			return errors.Errorf("--platform option can not be specified with --arch or --os")
+			return errors.New("--platform option can not be specified with --arch or --os")
 		}
 		split := strings.SplitN(platform, "/", 2)
 		pullOptions.OS = split[0]
@@ -155,6 +163,17 @@ func imagePull(cmd *cobra.Command, args []string) error {
 		pullOptions.Username = creds.Username
 		pullOptions.Password = creds.Password
 	}
+
+	decConfig, err := util.DecryptConfig(pullOptions.DecryptionKeys)
+	if err != nil {
+		return fmt.Errorf("unable to obtain decryption config: %w", err)
+	}
+	pullOptions.OciDecryptConfig = decConfig
+
+	if !pullOptions.Quiet {
+		pullOptions.Writer = os.Stderr
+	}
+
 	// Let's do all the remaining Yoga in the API to prevent us from
 	// scattering logic across (too) many parts of the code.
 	var errs utils.OutputErrors

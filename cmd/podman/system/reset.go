@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/containers/buildah/pkg/parse"
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/validate"
@@ -62,7 +63,8 @@ func reset(cmd *cobra.Command, args []string) {
         - all images
         - all networks
         - all build cache
-        - all machines`)
+        - all machines
+        - all volumes`)
 
 		if len(listCtn) > 0 {
 			fmt.Println(`WARNING! The following external containers will be purged:`)
@@ -87,22 +89,19 @@ func reset(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logrus.Error(err)
 	}
+	// Clean build cache if any
+	err = parse.CleanCacheMount()
+	if err != nil {
+		logrus.Error(err)
+	}
 	// Shutdown all running engines, `reset` will hijack repository
 	registry.ContainerEngine().Shutdown(registry.Context())
 	registry.ImageEngine().Shutdown(registry.Context())
 
-	engine, err := infra.NewSystemEngine(entities.ResetMode, registry.PodmanConfig())
-	if err != nil {
+	// Do not try to shut the engine down, as a Reset engine is not valid
+	// after its creation.
+	if _, err := infra.NewSystemEngine(entities.ResetMode, registry.PodmanConfig()); err != nil {
 		logrus.Error(err)
-		os.Exit(define.ExecErrorCodeGeneric)
-	}
-	defer engine.Shutdown(registry.Context())
-
-	if err := engine.Reset(registry.Context()); err != nil {
-		logrus.Error(err)
-		// FIXME change this to return the error like other commands
-		// defer will never run on os.Exit()
-		//nolint:gocritic
 		os.Exit(define.ExecErrorCodeGeneric)
 	}
 

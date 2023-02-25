@@ -2,6 +2,7 @@ package integration
 
 import (
 	"os"
+	"os/user"
 
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
@@ -89,6 +90,23 @@ var _ = Describe("Podman top", func() {
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
 		Expect(len(result.OutputToStringArray())).To(BeNumerically(">", 1))
+
+		result = podmanTest.Podman([]string{"container", "top", session.OutputToString(), "uid"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(len(result.OutputToStringArray())).To(BeNumerically(">", 1))
+		Expect(result.OutputToStringArray()[1]).To(Equal("0"))
+
+		user, err := user.Current()
+		if err != nil {
+			os.Exit(1)
+		}
+
+		result = podmanTest.Podman([]string{"container", "top", session.OutputToString(), "huid"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(len(result.OutputToStringArray())).To(BeNumerically(">", 1))
+		Expect(result.OutputToStringArray()[1]).To(Equal(user.Uid))
 	})
 
 	It("podman top with ps(1) options", func() {
@@ -133,4 +151,15 @@ var _ = Describe("Podman top", func() {
 		Expect(result).Should(Exit(125))
 	})
 
+	It("podman top on privileged container", func() {
+		session := podmanTest.Podman([]string{"run", "--privileged", "-d", ALPINE, "top"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		cid := session.OutputToString()
+
+		result := podmanTest.Podman([]string{"top", cid, "capeff"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(result.OutputToStringArray()).To(Equal([]string{"EFFECTIVE CAPS", "full"}))
+	})
 })

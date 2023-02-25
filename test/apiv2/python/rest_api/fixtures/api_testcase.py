@@ -20,7 +20,7 @@ class APITestCase(unittest.TestCase):
 
         APITestCase.podman = Podman()
         APITestCase.service = APITestCase.podman.open(
-            "system", "service", "tcp:localhost:8080", "--time=0"
+            "system", "service", "tcp://localhost:8080", "--time=0"
         )
         # give the service some time to be ready...
         time.sleep(2)
@@ -63,6 +63,10 @@ class APITestCase(unittest.TestCase):
     @staticmethod
     def uri(path):
         return APITestCase.PODMAN_URL + "/v2.0.0/libpod" + path
+
+    @staticmethod
+    def compat_uri(path):
+        return APITestCase.PODMAN_URL + "/v3.0.0/" + path
 
     def resolve_container(self, path):
         """Find 'first' container and return 'Id' formatted into given URI path."""

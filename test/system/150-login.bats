@@ -4,6 +4,7 @@
 #
 
 load helpers
+load helpers.network
 
 ###############################################################################
 # BEGIN one-time envariable setup
@@ -52,7 +53,7 @@ function setup() {
     mkdir -p $AUTHDIR
 
     # Registry image; copy of docker.io, but on our own registry
-    local REGISTRY_IMAGE="$PODMAN_TEST_IMAGE_REGISTRY/$PODMAN_TEST_IMAGE_USER/registry:2.7"
+    local REGISTRY_IMAGE="$PODMAN_TEST_IMAGE_REGISTRY/$PODMAN_TEST_IMAGE_USER/registry:2.8"
 
     # Pull registry image, but into a separate container storage
     mkdir -p ${PODMAN_LOGIN_WORKDIR}/root
@@ -122,7 +123,7 @@ function setup() {
                --password-stdin \
                $registry <<< "x${PODMAN_LOGIN_PASS}"
     is "$output" \
-       "Error: error logging into \"$registry\": invalid username/password" \
+       "Error: logging into \"$registry\": invalid username/password" \
        'output from podman login'
 }
 
@@ -180,7 +181,7 @@ EOF
     run_podman 125 push --authfile=$authfile \
         --tls-verify=false $IMAGE \
         localhost:${PODMAN_LOGIN_REGISTRY_PORT}/badpush:1
-    is "$output" ".*: unauthorized: authentication required" \
+    is "$output" ".* checking whether a blob .* exists in localhost:${PODMAN_LOGIN_REGISTRY_PORT}/badpush: authentication required" \
        "auth error on push"
 }
 
@@ -253,7 +254,7 @@ function _test_skopeo_credential_sharing() {
     run skopeo inspect "$@" --tls-verify=false docker://$registry/$destname
     echo "$output"
     is "$status" "1" "skopeo inspect - exit status"
-    is "$output" ".*: unauthorized: authentication required" \
+    is "$output" ".*: authentication required" \
        "auth error on skopeo inspect"
 }
 
@@ -290,6 +291,35 @@ function _test_skopeo_credential_sharing() {
     rm -f $authfile
 }
 
+@test "podman manifest --tls-verify - basic test" {
+    run_podman login --tls-verify=false \
+               --username ${PODMAN_LOGIN_USER} \
+               --password-stdin \
+               localhost:${PODMAN_LOGIN_REGISTRY_PORT} <<<"${PODMAN_LOGIN_PASS}"
+    is "$output" "Login Succeeded!" "output from podman login"
+
+    manifest1="localhost:${PODMAN_LOGIN_REGISTRY_PORT}/test:1.0"
+    run_podman manifest create $manifest1
+    mid=$output
+    run_podman manifest push --authfile=$authfile \
+        --tls-verify=false $mid \
+        $manifest1
+    run_podman manifest rm $manifest1
+    run_podman manifest inspect --insecure $manifest1
+    is "$output" ".*\"mediaType\": \"application/vnd.docker.distribution.manifest.list.v2+json\"" "Verify --insecure works against an insecure registry"
+    run_podman 125 manifest inspect --insecure=false $manifest1
+    is "$output" ".*Error: reading image \"docker://$manifest1\": pinging container registry localhost:${PODMAN_LOGIN_REGISTRY_PORT}:" "Verify --insecure=false fails"
+    run_podman manifest inspect --tls-verify=false $manifest1
+    is "$output" ".*\"mediaType\": \"application/vnd.docker.distribution.manifest.list.v2+json\"" "Verify --tls-verify=false works against an insecure registry"
+    run_podman 125 manifest inspect --tls-verify=true $manifest1
+    is "$output" ".*Error: reading image \"docker://$manifest1\": pinging container registry localhost:${PODMAN_LOGIN_REGISTRY_PORT}:" "Verify --tls-verify=true fails"
+
+    # Now log out
+    run_podman logout localhost:${PODMAN_LOGIN_REGISTRY_PORT}
+    is "$output" "Removed login credentials for localhost:${PODMAN_LOGIN_REGISTRY_PORT}" \
+       "output from podman logout"
+}
+
 # END   cooperation with skopeo
 # END   actual tests
 ###############################################################################
@@ -314,7 +344,7 @@ function _test_skopeo_credential_sharing() {
     fi
 
     # Make sure socket is closed
-    if { exec 3<> /dev/tcp/127.0.0.1/${PODMAN_LOGIN_REGISTRY_PORT}; } &>/dev/null; then
+    if tcp_port_probe $PODMAN_LOGIN_REGISTRY_PORT; then
         die "Socket still seems open"
     fi
 }

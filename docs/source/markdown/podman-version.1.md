@@ -1,4 +1,4 @@
-% podman-version(1)
+% podman-version 1
 
 ## NAME
 podman\-version - Display the Podman version information
@@ -15,6 +15,14 @@ OS, and Architecture.
 #### **--format**, **-f**=*format*
 
 Change output format to "json" or a Go template.
+
+| **Placeholder**     | **Description**          |
+| ------------------- | ------------------------ |
+| .Client ...         | Version of local podman  |
+| .Server ...         | Version of remote podman |
+
+Each of the above fields branch deeper into further subfields
+such as .Version, .APIVersion, .GoVersion, and more.
 
 ## Example
 

@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +20,7 @@ var _ = Describe("Podman commit", func() {
 
 	BeforeEach(func() {
 		tempdir, err = CreateTempDirInTempDir()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		podmanTest = PodmanTestCreate(tempdir)
 		podmanTest.Setup()
 	})
@@ -128,7 +127,7 @@ var _ = Describe("Podman commit", func() {
 				break
 			}
 		}
-		Expect(foundBlue).To(Equal(true))
+		Expect(foundBlue).To(BeTrue())
 	})
 
 	It("podman commit container with --squash", func() {
@@ -269,8 +268,8 @@ var _ = Describe("Podman commit", func() {
 	It("podman commit container and print id to external file", func() {
 		// Switch to temp dir and restore it afterwards
 		cwd, err := os.Getwd()
-		Expect(err).To(BeNil())
-		Expect(os.Chdir(os.TempDir())).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Chdir(os.TempDir())).To(Succeed())
 		targetPath, err := CreateTempDirInTempDir()
 		if err != nil {
 			os.Exit(1)
@@ -287,7 +286,7 @@ var _ = Describe("Podman commit", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		id, _ := ioutil.ReadFile(targetFile)
+		id, _ := os.ReadFile(targetFile)
 		check := podmanTest.Podman([]string{"inspect", "foobar.com/test1-image:latest"})
 		check.WaitWithDefaultTimeout()
 		data := check.InspectImageJSON()
@@ -297,8 +296,8 @@ var _ = Describe("Podman commit", func() {
 	It("podman commit should not commit secret", func() {
 		secretsString := "somesecretdata"
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte(secretsString), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte(secretsString), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "mysecret", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -322,8 +321,8 @@ var _ = Describe("Podman commit", func() {
 	It("podman commit should not commit env secret", func() {
 		secretsString := "somesecretdata"
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte(secretsString), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte(secretsString), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "mysecret", secretFilePath})
 		session.WaitWithDefaultTimeout()
@@ -362,7 +361,7 @@ var _ = Describe("Podman commit", func() {
 		Expect(images[0].Config.ExposedPorts).To(HaveKey("80/tcp"))
 
 		name = "testcon2"
-		s = podmanTest.Podman([]string{"run", "--name", name, "-d", nginx})
+		s = podmanTest.Podman([]string{"run", "--name", name, "-d", NGINX_IMAGE})
 		s.WaitWithDefaultTimeout()
 		Expect(s).Should(Exit(0))
 

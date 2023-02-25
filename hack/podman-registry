@@ -7,7 +7,7 @@ ME=$(basename $0)
 ###############################################################################
 # BEGIN defaults
 
-PODMAN_REGISTRY_IMAGE=quay.io/libpod/registry:2.6
+PODMAN_REGISTRY_IMAGE=quay.io/libpod/registry:2.8
 
 PODMAN_REGISTRY_USER=
 PODMAN_REGISTRY_PASS=
@@ -30,7 +30,7 @@ into a local temporary directory, create an htpasswd, start the
 registry, and dump a series of environment variables to stdout:
 
     \$ $ME start
-    PODMAN_REGISTRY_IMAGE=\"docker.io/library/registry:2.6\"
+    PODMAN_REGISTRY_IMAGE=\"docker.io/library/registry:2.8\"
     PODMAN_REGISTRY_PORT=\"5050\"
     PODMAN_REGISTRY_USER=\"userZ3RZ\"
     PODMAN_REGISTRY_PASS=\"T8JVJzKrcl4p6uT\"
@@ -122,6 +122,25 @@ function must_pass() {
     fi
 }
 
+###################
+#  wait_for_port  #  Returns once port is available on localhost
+###################
+function wait_for_port() {
+    local port=$1                      # Numeric port
+
+    local host=127.0.0.1
+    local _timeout=5
+
+    # Wait
+    while [ $_timeout -gt 0 ]; do
+        { exec {unused_fd}<> /dev/tcp/$host/$port; } &>/dev/null && return
+        sleep 1
+        _timeout=$(( $_timeout - 1 ))
+    done
+
+    die "Timed out waiting for port $port"
+}
+
 # END   helper functions
 ###############################################################################
 # BEGIN action processing
@@ -130,7 +149,7 @@ function do_start() {
     # If called without a port, assign a random one in the 5xxx range
     if [ -z "${PODMAN_REGISTRY_PORT}" ]; then
         for port in $(shuf -i 5000-5999);do
-            if ! { exec 3<> /dev/tcp/127.0.0.1/$port; } &>/dev/null; then
+            if ! { exec {unused_fd}<> /dev/tcp/127.0.0.1/$port; } &>/dev/null; then
                 PODMAN_REGISTRY_PORT=$port
                 break
             fi
@@ -178,13 +197,11 @@ function do_start() {
 
     # Store credentials where container will see them. We can't run
     # this one via must_pass because we need its stdout.
-    podman run --rm                                               \
-           --entrypoint htpasswd ${PODMAN_REGISTRY_IMAGE}         \
-           -Bbn ${PODMAN_REGISTRY_USER} ${PODMAN_REGISTRY_PASS}   \
+    htpasswd -Bbn ${PODMAN_REGISTRY_USER} ${PODMAN_REGISTRY_PASS}   \
            > $AUTHDIR/htpasswd
     if [ $? -ne 0 ]; then
         rm -rf ${PODMAN_REGISTRY_WORKDIR}
-        die "Command failed: podman run [htpasswd]"
+        die "Command failed: htpasswd"
     fi
 
     # In case someone needs to debug
@@ -201,7 +218,10 @@ function do_start() {
               -e "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd"           \
               -e "REGISTRY_HTTP_TLS_CERTIFICATE=/auth/domain.crt"       \
               -e "REGISTRY_HTTP_TLS_KEY=/auth/domain.key"               \
-              registry:2.6
+              ${PODMAN_REGISTRY_IMAGE}
+
+    # Confirm that registry started and port is active
+    wait_for_port $PODMAN_REGISTRY_PORT
 
     # Dump settings. Our caller will use these to access the registry.
     for v in IMAGE PORT USER PASS; do

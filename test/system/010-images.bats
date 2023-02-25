@@ -158,6 +158,11 @@ Labels.created_at | 20[0-9-]\\\+T[0-9:]\\\+Z
     # start here because this is the first one, fix this problem.
     # You can (probably) ignore any subsequent failures showing '@sha'
     # in the error output.
+    #
+    # WARNING! This test is likely to fail for an hour or so after
+    # building a new testimage (via build-testimage script), because
+    # two consecutive 'podman images' may result in a one-minute
+    # difference in the "XX minutes ago" output. This is OK to ignore.
     run_podman images -a
     is "$output" "$images_baseline" "images -a, after pull: same as before"
 
@@ -227,20 +232,6 @@ Labels.created_at | 20[0-9-]\\\+T[0-9:]\\\+Z
     run_podman rmi ${aaa_name}:${aaa_tag} ${zzz_name}:${zzz_tag}
 }
 
-# Regression test for #8931
-@test "podman images - bare manifest list" {
-    # Create an empty manifest list and list images.
-
-    run_podman inspect --format '{{.ID}}' $IMAGE
-    iid=$output
-
-    run_podman manifest create test:1.0
-    run_podman images --format '{{.ID}}' --no-trunc
-    [[ "$output" == *"sha256:$iid"* ]]
-
-    run_podman rmi test:1.0
-}
-
 @test "podman images - rmi -af removes all containers and pods" {
     pname=$(random_string)
     run_podman create --pod new:$pname $IMAGE
@@ -254,8 +245,8 @@ Labels.created_at | 20[0-9-]\\\+T[0-9:]\\\+Z
 
     run_podman 2 rmi -a
     is "$output" "Error: 2 errors occurred:
-.** Image used by .*: image is in use by a container
-.** Image used by .*: image is in use by a container"
+.** image used by .*: image is in use by a container: consider listing external containers and force-removing image
+.** image used by .*: image is in use by a container: consider listing external containers and force-removing image"
 
     run_podman rmi -af
     is "$output" "Untagged: $IMAGE
@@ -281,13 +272,12 @@ Deleted: $pauseID" "infra images gets removed as well"
     pname=$(random_string)
     run_podman create --pod new:$pname $IMAGE
 
-    run_podman version --format "{{.Server.Version}}-{{.Server.Built}}"
-    pauseImage=localhost/podman-pause:$output
+    pauseImage=$(pause_image)
     run_podman inspect --format '{{.ID}}' $pauseImage
     pauseID=$output
 
     run_podman 2 rmi $pauseImage
-    is "$output" "Error: Image used by .* image is in use by a container"
+    is "$output" "Error: image used by .* image is in use by a container: consider listing external containers and force-removing image"
 
     run_podman rmi -f $pauseImage
     is "$output" "Untagged: $pauseImage
@@ -310,6 +300,13 @@ Deleted: $pauseID"
     is "$output" "Error: $random_image_name: image not known.*"
     run_podman rmi --ignore $random_image_name
     is "$output" ""
+}
+
+@test "podman image rm --force bogus" {
+    run_podman 1 image rm bogus
+    is "$output" "Error: bogus: image not known" "Should print error"
+    run_podman image rm --force bogus
+    is "$output" "" "Should print no output"
 }
 
 # vim: filetype=sh

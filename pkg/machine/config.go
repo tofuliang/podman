@@ -4,8 +4,8 @@
 package machine
 
 import (
-	errors2 "errors"
-	"io/ioutil"
+	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"os"
@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/containers/storage/pkg/homedir"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,17 +41,23 @@ const (
 	// Running indicates the qemu vm is running.
 	Running Status = "running"
 	// Stopped indicates the vm has stopped.
-	Stopped            Status = "stopped"
+	Stopped Status = "stopped"
+	// Starting indicated the vm is in the process of starting
+	Starting           Status = "starting"
 	DefaultMachineName string = "podman-machine-default"
 )
 
-type Provider interface {
-	NewMachine(opts InitOptions) (VM, error)
-	LoadVMByName(name string) (VM, error)
-	List(opts ListOptions) ([]*ListResponse, error)
-	IsValidVMName(name string) (bool, error)
+type VirtProvider interface {
+	Artifact() Artifact
 	CheckExclusiveActiveVM() (bool, string, error)
+	Compression() ImageCompression
+	Format() ImageFormat
+	IsValidVMName(name string) (bool, error)
+	List(opts ListOptions) ([]*ListResponse, error)
+	LoadVMByName(name string) (VM, error)
+	NewMachine(opts InitOptions) (VM, error)
 	RemoveAndCleanMachines() error
+	VMType() string
 }
 
 type RemoteConnectionType string
@@ -62,16 +67,18 @@ var (
 	DefaultIgnitionUserName                      = "core"
 	ErrNoSuchVM                                  = errors.New("VM does not exist")
 	ErrVMAlreadyExists                           = errors.New("VM already exists")
-	ErrVMAlreadyRunning                          = errors.New("VM already running")
+	ErrVMAlreadyRunning                          = errors.New("VM already running or starting")
 	ErrMultipleActiveVM                          = errors.New("only one VM can be active at a time")
+	ErrNotImplemented                            = errors.New("functionality not implemented")
 	ForwarderBinaryName                          = "gvproxy"
 )
 
 type Download struct {
 	Arch                  string
-	Artifact              string
+	Artifact              Artifact
 	CompressionType       string
-	Format                string
+	CacheDir              string
+	Format                ImageFormat
 	ImageName             string
 	LocalPath             string
 	LocalUncompressedFile string
@@ -88,6 +95,7 @@ type ListResponse struct {
 	CreatedAt      time.Time
 	LastUp         time.Time
 	Running        bool
+	Starting       bool
 	Stream         string
 	VMType         string
 	CPUs           uint64
@@ -109,7 +117,11 @@ type SSHOptions struct {
 	Username string
 	Args     []string
 }
-type StartOptions struct{}
+
+type StartOptions struct {
+	NoInfo bool
+	Quiet  bool
+}
 
 type StopOptions struct{}
 
@@ -136,16 +148,18 @@ type VM interface {
 type DistributionDownload interface {
 	HasUsableCache() (bool, error)
 	Get() *Download
+	CleanCache() error
 }
 type InspectInfo struct {
-	ConfigPath VMFile
-	Created    time.Time
-	Image      ImageConfig
-	LastUp     time.Time
-	Name       string
-	Resources  ResourceConfig
-	SSHConfig  SSHConfig
-	State      Status
+	ConfigPath     VMFile
+	ConnectionInfo ConnectionConfig
+	Created        time.Time
+	Image          ImageConfig
+	LastUp         time.Time
+	Name           string
+	Resources      ResourceConfig
+	SSHConfig      SSHConfig
+	State          Status
 }
 
 func (rc RemoteConnectionType) MakeSSHURL(host, path, port, userName string) url.URL {
@@ -168,6 +182,19 @@ func (rc RemoteConnectionType) MakeSSHURL(host, path, port, userName string) url
 	return uri
 }
 
+// GetCacheDir returns the dir where VM images are downloaded into when pulled
+func GetCacheDir(vmType string) (string, error) {
+	dataDir, err := GetDataDir(vmType)
+	if err != nil {
+		return "", err
+	}
+	cacheDir := filepath.Join(dataDir, "cache")
+	if _, err := os.Stat(cacheDir); !errors.Is(err, os.ErrNotExist) {
+		return cacheDir, nil
+	}
+	return cacheDir, os.MkdirAll(cacheDir, 0755)
+}
+
 // GetDataDir returns the filepath where vm images should
 // live for podman-machine.
 func GetDataDir(vmType string) (string, error) {
@@ -176,7 +203,7 @@ func GetDataDir(vmType string) (string, error) {
 		return "", err
 	}
 	dataDir := filepath.Join(dataDirPrefix, vmType)
-	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
 		return dataDir, nil
 	}
 	mkdirErr := os.MkdirAll(dataDir, 0755)
@@ -201,7 +228,7 @@ func GetConfDir(vmType string) (string, error) {
 		return "", err
 	}
 	confDir := filepath.Join(confDirPrefix, vmType)
-	if _, err := os.Stat(confDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(confDir); !errors.Is(err, os.ErrNotExist) {
 		return confDir, nil
 	}
 	mkdirErr := os.MkdirAll(confDir, 0755)
@@ -216,6 +243,15 @@ func ConfDirPrefix() (string, error) {
 	}
 	confDir := filepath.Join(conf, "containers", "podman", "machine")
 	return confDir, nil
+}
+
+// GuardedRemoveAll functions much like os.RemoveAll but
+// will not delete certain catastrophic paths.
+func GuardedRemoveAll(path string) error {
+	if path == "" || path == "/" {
+		return fmt.Errorf("refusing to recursively delete `%s`", path)
+	}
+	return os.RemoveAll(path)
 }
 
 // ResourceConfig describes physical attributes of the machine
@@ -251,11 +287,11 @@ func (m *VMFile) GetPath() string {
 // the actual path
 func (m *VMFile) Delete() error {
 	if m.Symlink != nil {
-		if err := os.Remove(*m.Symlink); err != nil && !errors2.Is(err, os.ErrNotExist) {
+		if err := os.Remove(*m.Symlink); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logrus.Errorf("unable to remove symlink %q", *m.Symlink)
 		}
 	}
-	if err := os.Remove(m.Path); err != nil && !errors2.Is(err, os.ErrNotExist) {
+	if err := os.Remove(m.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -263,20 +299,20 @@ func (m *VMFile) Delete() error {
 
 // Read the contents of a given file and return in []bytes
 func (m *VMFile) Read() ([]byte, error) {
-	return ioutil.ReadFile(m.GetPath())
+	return os.ReadFile(m.GetPath())
 }
 
 // NewMachineFile is a constructor for VMFile
 func NewMachineFile(path string, symlink *string) (*VMFile, error) {
 	if len(path) < 1 {
-		return nil, errors2.New("invalid machine file path")
+		return nil, errors.New("invalid machine file path")
 	}
 	if symlink != nil && len(*symlink) < 1 {
-		return nil, errors2.New("invalid symlink path")
+		return nil, errors.New("invalid symlink path")
 	}
 	mf := VMFile{Path: path}
 	if symlink != nil && len(path) > maxSocketPathLength {
-		if err := mf.makeSymlink(symlink); err != nil && !errors2.Is(err, os.ErrExist) {
+		if err := mf.makeSymlink(symlink); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
 	}
@@ -286,13 +322,13 @@ func NewMachineFile(path string, symlink *string) (*VMFile, error) {
 // makeSymlink for macOS creates a symlink in $HOME/.podman/
 // for a machinefile like a socket
 func (m *VMFile) makeSymlink(symlink *string) error {
-	homedir, err := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	sl := filepath.Join(homedir, ".podman", *symlink)
+	sl := filepath.Join(homeDir, ".podman", *symlink)
 	// make the symlink dir and throw away if it already exists
-	if err := os.MkdirAll(filepath.Dir(sl), 0700); err != nil && !errors2.Is(err, os.ErrNotExist) {
+	if err := os.MkdirAll(filepath.Dir(sl), 0700); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	m.Symlink = &sl
@@ -334,4 +370,12 @@ type SSHConfig struct {
 	Port int
 	// RemoteUsername of the vm user
 	RemoteUsername string
+}
+
+// ConnectionConfig contains connections like sockets, etc.
+type ConnectionConfig struct {
+	// PodmanSocket is the exported podman service socket
+	PodmanSocket *VMFile `json:"PodmanSocket"`
+	// PodmanPipe is the exported podman service named pipe (Windows hosts only)
+	PodmanPipe *VMFile `json:"PodmanPipe"`
 }

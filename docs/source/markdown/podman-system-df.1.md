@@ -1,4 +1,4 @@
-% podman-system-df(1)
+% podman-system-df 1
 
 ## NAME
 podman\-system\-df - Show podman disk usage
@@ -12,7 +12,7 @@ Show podman disk usage
 ## OPTIONS
 #### **--format**=*format*
 
-Pretty-print images using a Go template
+Pretty-print images using a Go template or JSON. This flag is not allowed in combination with **--verbose**
 
 #### **--verbose**, **-v**
 Show detailed information on space usage

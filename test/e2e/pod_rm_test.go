@@ -3,7 +3,6 @@ package integration
 import (
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,14 +50,14 @@ var _ = Describe("Podman pod rm", func() {
 				return err
 			}
 			if !d.IsDir() {
-				Expect(err).To(BeNil())
+				Expect(err).ToNot(HaveOccurred())
 			}
 			if strings.Contains(d.Name(), podid) {
 				return fmt.Errorf("leaking cgroup path %s", path)
 			}
 			return nil
 		})
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("podman pod rm latest pod", func() {
@@ -143,7 +142,7 @@ var _ = Describe("Podman pod rm", func() {
 		result.WaitWithDefaultTimeout()
 		Expect(result).To(ExitWithError())
 		foundExpectedError, _ := result.ErrorGrepString("cannot be removed")
-		Expect(foundExpectedError).To(Equal(true))
+		Expect(foundExpectedError).To(BeTrue())
 
 		numPods = podmanTest.NumberOfPods()
 		ps = podmanTest.Podman([]string{"pod", "ps"})
@@ -235,8 +234,8 @@ var _ = Describe("Podman pod rm", func() {
 	})
 
 	It("podman pod start/remove single pod via --pod-id-file", func() {
-		tmpDir, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		tmpFile := tmpDir + "podID"
 		defer os.RemoveAll(tmpDir)
 
@@ -264,8 +263,8 @@ var _ = Describe("Podman pod rm", func() {
 	})
 
 	It("podman pod start/remove multiple pods via --pod-id-file", func() {
-		tmpDir, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
 		podIDFiles := []string{}
@@ -317,5 +316,32 @@ var _ = Describe("Podman pod rm", func() {
 		result := podmanTest.Podman([]string{"pod", "rm", podid})
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
+	})
+
+	It("podman pod rm pod with infra container and running container", func() {
+		podName := "testPod"
+		ctrName := "testCtr"
+
+		ctrAndPod := podmanTest.Podman([]string{"run", "-d", "--pod", fmt.Sprintf("new:%s", podName), "--name", ctrName, ALPINE, "top"})
+		ctrAndPod.WaitWithDefaultTimeout()
+		Expect(ctrAndPod).Should(Exit(0))
+
+		removePod := podmanTest.Podman([]string{"pod", "rm", "-a"})
+		removePod.WaitWithDefaultTimeout()
+		Expect(removePod).Should(Not(Exit(0)))
+
+		ps := podmanTest.Podman([]string{"pod", "ps"})
+		ps.WaitWithDefaultTimeout()
+		Expect(ps).Should(Exit(0))
+		Expect(ps.OutputToString()).To(ContainSubstring(podName))
+
+		removePodForce := podmanTest.Podman([]string{"pod", "rm", "-af"})
+		removePodForce.WaitWithDefaultTimeout()
+		Expect(removePodForce).Should(Exit(0))
+
+		ps2 := podmanTest.Podman([]string{"pod", "ps"})
+		ps2.WaitWithDefaultTimeout()
+		Expect(ps2).Should(Exit(0))
+		Expect(ps2.OutputToString()).To(Not(ContainSubstring(podName)))
 	})
 })

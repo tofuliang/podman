@@ -66,7 +66,7 @@ load helpers
 
     # Container (parent) path does not exist.
     run_podman 125 cp $srcdir/hostfile0 cpcontainer:/IdoNotExist/
-    is "$output" 'Error: "/IdoNotExist/" could not be found on container cpcontainer: No such file or directory' \
+    is "$output" 'Error: "/IdoNotExist/" could not be found on container cpcontainer: no such file or directory' \
        "copy into nonexistent path in container"
 
     run_podman kill cpcontainer
@@ -275,7 +275,7 @@ load helpers
         run_podman exec $destcontainer cat "/$dest_fullname"
         is "$output" "${randomcontent[$id]}" "$description (cp ctr:$src to /$dest)"
 
-	# To CREATED container
+        # To CREATED container
         run_podman create $IMAGE sleep infinity
         destcontainer="$output"
         destcontainers+=($destcontainer)
@@ -303,7 +303,7 @@ load helpers
         run_podman cp cpcontainer:$src $destcontainer:"/$dest"
         run_podman exec $destcontainer cat "/$dest_fullname"
         is "$output" "${randomcontent[$id]}" "$description (cp ctr:$src to /$dest)"
-	# To CREATED container
+        # To CREATED container
         run_podman create $IMAGE sleep infinity
         destcontainer="$output"
         destcontainers+=($destcontainer)
@@ -436,7 +436,7 @@ load helpers
         run_podman cp cpcontainer:$src $destdir$dest
         is "$(< $destdir$dest_fullname/containerfile0)" "${randomcontent[0]}" "$description"
         is "$(< $destdir$dest_fullname/containerfile1)" "${randomcontent[1]}" "$description"
-        rm -rf $destdir/*
+        rm -rf ${destdir:?}/*
     done < <(parse_table "$tests")
     run_podman kill cpcontainer
     run_podman rm -t 0 -f cpcontainer
@@ -456,7 +456,7 @@ load helpers
         run_podman cp cpcontainer:$src $destdir$dest
         is "$(< $destdir$dest_fullname/containerfile0)" "${randomcontent[0]}" "$description"
         is "$(< $destdir$dest_fullname/containerfile1)" "${randomcontent[1]}" "$description"
-        rm -rf $destdir/*
+        rm -rf ${destdir:?}/*
     done < <(parse_table "$tests")
 
     touch $destdir/testfile
@@ -518,7 +518,7 @@ load helpers
         is "$output" "${randomcontent[0]}
 ${randomcontent[1]}" "$description"
 
-	# To CREATED container
+        # To CREATED container
         run_podman create $IMAGE sleep infinity
         destcontainer="$output"
         destcontainers+=($destcontainer)
@@ -545,7 +545,7 @@ ${randomcontent[1]}" "$description"
             unset dest_fullname
         fi
 
-	# To RUNNING container
+        # To RUNNING container
         run_podman run -d $IMAGE sleep infinity
         destcontainer="$output"
         destcontainers+=($destcontainer)
@@ -554,7 +554,7 @@ ${randomcontent[1]}" "$description"
         is "$output" "${randomcontent[0]}
 ${randomcontent[1]}" "$description"
 
-	# To CREATED container
+        # To CREATED container
         run_podman create $IMAGE sleep infinity
         destcontainer="$output"
         destcontainers+=($destcontainer)
@@ -794,7 +794,7 @@ ${randomcontent[1]}" "$description"
     is "$output" "" "output from podman cp 1"
 
     run_podman 125 cp --pause=false $srcdir/$rand_filename2 cpcontainer:/tmp/d2/x/
-    is "$output" 'Error: "/tmp/d2/x/" could not be found on container cpcontainer: No such file or directory' "cp will not create nonexistent destination directory"
+    is "$output" 'Error: "/tmp/d2/x/" could not be found on container cpcontainer: no such file or directory' "cp will not create nonexistent destination directory"
 
     run_podman cp --pause=false $srcdir/$rand_filename3 cpcontainer:/tmp/d3/x
     is "$output" "" "output from podman cp 3"
@@ -949,9 +949,145 @@ ${randomcontent[1]}" "$description"
     run_podman rm -t 0 -f cpcontainer
 }
 
+@test "podman cp --overwrite file - ctr/ctr" {
+    rand_content_file=$(random_string 50)
+    rand_content_dir=$(random_string 50)
+
+    run_podman run -d --name ctr-file $IMAGE sh -c "echo '$rand_content_file' > /tmp/foo; sleep infinity"
+    run_podman run -d --name ctr-dir  $IMAGE sh -c "mkdir /tmp/foo; echo '$rand_content_dir' > /tmp/foo/file.txt; sleep infinity"
+
+    # overwrite a directory with a file
+    run_podman 125 cp ctr-file:/tmp/foo ctr-dir:/tmp
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/tmp/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite ctr-file:/tmp/foo ctr-dir:/tmp
+    run_podman exec ctr-dir cat /tmp/foo
+    is "$output" "$rand_content_file"
+
+    # reset the ctr-dir container
+    run_podman exec ctr-dir sh -c "rm -rf /tmp/foo; mkdir /tmp/foo; echo '$rand_content_dir' > /tmp/foo/file.txt"
+
+    # overwrite a file with a directory
+    run_podman 125 cp ctr-dir:/tmp/foo ctr-file:/tmp
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/tmp/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite ctr-dir:/tmp/foo ctr-file:/tmp
+    run_podman exec ctr-file cat /tmp/foo/file.txt
+    is "$output" "$rand_content_dir"
+
+    run_podman rm -t 0 -f ctr-file ctr-dir
+}
+
+@test "podman cp --overwrite file - ctr/host" {
+    hostdir=$PODMAN_TMPDIR/cp-test
+    mkdir -p $hostdir
+
+    rand_content_file=$(random_string 50)
+    rand_content_dir=$(random_string 50)
+
+    run_podman run -d --name ctr-file $IMAGE sh -c "echo '$rand_content_file' > /tmp/foo; sleep infinity"
+    run_podman run -d --name ctr-dir  $IMAGE sh -c "mkdir /tmp/foo; echo '$rand_content_dir' > /tmp/foo/file.txt; sleep infinity"
+
+    # overwrite a directory with a file
+    mkdir $hostdir/foo
+    run_podman 125 cp ctr-file:/tmp/foo $hostdir
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite ctr-file:/tmp/foo $hostdir
+    is "$(< $hostdir/foo)" "$rand_content_file"
+
+    # overwrite a file with a directory
+    rm -rf $hostdir/foo
+    touch $hostdir/foo
+    run_podman 125 cp ctr-dir:/tmp/foo $hostdir
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite ctr-dir:/tmp/foo $hostdir
+    is "$(< $hostdir/foo/file.txt)" "$rand_content_dir"
+
+    run_podman rm -t 0 -f ctr-file ctr-dir
+}
+
+@test "podman cp --overwrite file - host/ctr" {
+    hostdir=$PODMAN_TMPDIR/cp-test
+    mkdir -p $hostdir
+
+    rand_content_file=$(random_string 50)
+    rand_content_dir=$(random_string 50)
+
+    run_podman run -d --name ctr-dir  $IMAGE sh -c "mkdir /tmp/foo; sleep infinity"
+    run_podman run -d --name ctr-file $IMAGE sh -c "touch /tmp/foo; sleep infinity"
+
+    # overwrite a directory with a file
+    echo "$rand_content_file" > $hostdir/foo
+    run_podman 125 cp  $hostdir/foo ctr-dir:/tmp
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/tmp/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite $hostdir/foo ctr-dir:/tmp
+    run_podman exec ctr-dir cat /tmp/foo
+    is "$output" "$rand_content_file"
+
+    # overwrite a file with a directory
+    rm -f $hostdir/foo
+    mkdir $hostdir/foo
+    echo "$rand_content_dir" > $hostdir/foo/file.txt
+    run_podman 125 cp $hostdir/foo ctr-file:/tmp
+    if ! is_remote; then # remote just returns a 500
+        is "$output" ".* error creating \"/tmp/foo\": .*: file exists.*"
+    fi
+    run_podman cp --overwrite $hostdir/foo ctr-file:/tmp
+    run_podman exec ctr-file cat /tmp/foo/file.txt
+    is "$output" "$rand_content_dir"
+
+    run_podman rm -t 0 -f ctr-file ctr-dir
+}
+
+@test "podman cp - dot notation - host to container" {
+    srcdir=$PODMAN_TMPDIR/src
+    mkdir -p $srcdir
+    mkdir -p $srcdir/test1. $srcdir/test2
+    touch $srcdir/test1./file1 $srcdir/test2/file2
+
+    run_podman run -d --name=test-ctr --rm $IMAGE sleep infinity
+    run_podman cp $srcdir/test1. test-ctr:/tmp/foo
+    run_podman exec test-ctr stat /tmp/foo/file1
+
+    run_podman rm -f -t0 test-ctr
+}
+
+@test "podman cp - dot notation - container to host" {
+    dstdir=$PODMAN_TMPDIR/dst
+    mkdir -p $dstdir
+
+    run_podman run -d --name=test-ctr --rm $IMAGE sh -c "mkdir -p /foo/test1. /foo/test2; touch /foo/test1./file1 /foo/test2/file2; sleep infinity"
+    run_podman cp test-ctr:/foo/test1. $dstdir/foo
+    run stat $dstdir/foo/test1.
+    if [[ -e $dstdir/foo/test2 ]]; then
+        die "the test2 directory should not have been copied over"
+    fi
+
+    run_podman rm -f -t0 test-ctr
+}
+
+@test "podman cp - dot notation - container to container" {
+    run_podman run -d --name=src-ctr --rm $IMAGE sh -c "mkdir -p /foo/test1. /foo/test2; touch /foo/test1./file1 /foo/test2/file2; sleep infinity"
+    run_podman run -d --name=dest-ctr --rm $IMAGE sleep infinity
+    run_podman cp src-ctr:/foo/test1. dest-ctr:/foo
+
+    run_podman exec dest-ctr find /foo
+    run_podman exec dest-ctr stat /foo/file1
+
+    run_podman rm -f -t0 src-ctr dest-ctr
+}
+
 function teardown() {
     # In case any test fails, clean up the container we left behind
-    run_podman rm -t 0 f cpcontainer
+    run_podman rm -t 0 -f --ignore cpcontainer
     basic_teardown
 }
 

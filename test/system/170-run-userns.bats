@@ -30,6 +30,7 @@ function _require_crun() {
 }
 
 @test "podman --group-add without keep-groups while in a userns" {
+    skip_if_cgroupsv1 "FIXME: #15025: run --uidmap fails on cgroups v1"
     skip_if_rootless "chroot is not allowed in rootless mode"
     skip_if_remote "--group-add keep-groups not supported in remote mode"
     run chroot --groups 1234,5678 / ${PODMAN} run --rm --uidmap 0:200000:5000 --group-add 457 $IMAGE id
@@ -37,16 +38,18 @@ function _require_crun() {
 }
 
 @test "rootful pod with custom ID mapping" {
+    skip_if_cgroupsv1 "FIXME: #15025: run --uidmap fails on cgroups v1"
     skip_if_rootless "does not work rootless - rootful feature"
-    skip_if_remote "remote --uidmap is broken (see #14233)"
     random_pod_name=$(random_string 30)
     run_podman pod create --uidmap 0:200000:5000 --name=$random_pod_name
     run_podman pod start $random_pod_name
+    run_podman pod inspect --format '{{.InfraContainerID}}' $random_pod_name
+    run_podman inspect --format '{{.HostConfig.IDMappings.UIDMap}}' $output
+    is "$output" ".*0:200000:5000" "UID Map Successful"
 
     # Remove the pod and the pause image
     run_podman pod rm $random_pod_name
-    run_podman version --format "{{.Server.Version}}-{{.Server.Built}}"
-    run_podman rmi -f localhost/podman-pause:$output
+    run_podman rmi -f $(pause_image)
 }
 
 @test "podman --remote --group-add keep-groups " {
@@ -109,15 +112,34 @@ EOF
 }
 
 @test "podman userns=nomap" {
-    skip_if_not_rootless "--userns=nomap only works in rootless mode"
-    ns_user=$(id -un)
-    baseuid=$(egrep "${ns_user}:" /etc/subuid | cut -f2 -d:)
-    test ! -z ${baseuid} ||  skip "no IDs allocated for user ${ns_user}"
+    if is_rootless; then
+        ns_user=$(id -un)
+        baseuid=$(egrep "${ns_user}:" /etc/subuid | cut -f2 -d:)
+        test ! -z ${baseuid} ||  skip "no IDs allocated for user ${ns_user}"
 
-    test_name="test_$(random_string 12)"
-    run_podman run -d --userns=nomap $IMAGE sleep 100
-    cid=${output}
-    run_podman top ${cid} huser
-    is "${output}" "HUSER.*${baseuid}" "Container should start with baseuid from /etc/subuid not user UID"
-    run_podman rm -t 0 --force ${cid}
+        test_name="test_$(random_string 12)"
+        run_podman run -d --userns=nomap $IMAGE sleep 100
+        cid=${output}
+        run_podman top ${cid} huser
+        is "${output}" "HUSER.*${baseuid}" "Container should start with baseuid from /etc/subuid not user UID"
+        run_podman rm -t 0 --force ${cid}
+    else
+        run_podman 125 run -d --userns=nomap $IMAGE sleep 100
+        is "${output}" "Error: nomap is only supported in rootless mode" "Container should fail to start since nomap is not supported in rootful mode"
+    fi
+}
+
+@test "podman userns=keep-id" {
+    user=$(id -u)
+    run_podman run --rm --userns=keep-id $IMAGE id -u
+    is "${output}" "$user" "Container should run as the current user"
+}
+
+@test "podman userns=keep-id in a pod" {
+    user=$(id -u)
+    run_podman pod create --userns keep-id
+    pid=$output
+    run_podman run --rm --pod $pid $IMAGE id -u
+    is "${output}" "$user" "Container should run as the current user"
+    run_podman rmi -f $(pause_image)
 }

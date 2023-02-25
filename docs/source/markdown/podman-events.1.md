@@ -1,10 +1,12 @@
-% podman-events(1)
+% podman-events 1
 
 ## NAME
 podman\-events - Monitor Podman events
 
 ## SYNOPSIS
 **podman events** [*options*]
+
+**podman system events** [*options*]
 
 ## DESCRIPTION
 
@@ -24,6 +26,7 @@ The *container* event type will report the follow statuses:
  * commit
  * connect
  * create
+ * died
  * disconnect
  * exec
  * exec_died
@@ -74,10 +77,13 @@ The *volume* type will report the following statuses:
  * prune
  * remove
 
+#### Verbose Create Events
+
+Setting `events_container_create_inspect_data=true` in containers.conf(5) instructs Podman to create more verbose container-create events which include a JSON payload with detailed information about the containers.  The JSON payload is identical to the one of podman-container-inspect(1).  The associated field in journald is named `PODMAN_CONTAINER_INSPECT_DATA`.
 
 ## OPTIONS
 
-#### **--filter**=*filter*
+#### **--filter**, **-f**=*filter*
 
 Filter events that are displayed.  They must be in the format of "filter=value".  The following
 filters are supported:
@@ -89,11 +95,26 @@ filters are supported:
  * volume=name_or_id
  * type=event_type (described above)
 
-In the case where an ID is used, the ID may be in its full or shortened form.
+In the case where an ID is used, the ID may be in its full or shortened form.  The "die" event is mapped to "died" for Docker compatibility.
 
 #### **--format**
 
 Format the output to JSON Lines or using the given Go template.
+
+| **Placeholder**       | **Description**                               |
+|-----------------------|-----------------------------------------------|
+| .Attributes           | created_at, _by, labels, and more (map[])     |
+| .ContainerExitCode    | Exit code (int)                               |
+| .ContainerInspectData | Payload of the container's inspect            |
+| .HealthStatus         | Health Status (string)                        |
+| .ID                   | Container ID (full 64-bit SHA)                |
+| .Image                | Name of image being run (string)              |
+| .Name                 | Container name (string)                       |
+| .Network              | Name of network being used (string)           |
+| .PodID                | ID of pod associated with container, if any   |
+| .Status               | Event status (e.g., create, start, died, ...) |
+| .Time                 | Event timestamp (string)                      |
+| .Type                 | Event type (e.g., image, container, pod, ...) |
 
 #### **--help**
 
@@ -115,6 +136,25 @@ Show all events created until the given timestamp
 The *since* and *until* values can be RFC3339Nano time stamps or a Go duration string such as 10m, 5h. If no
 *since* or *until* values are provided, only new events will be shown.
 
+## JOURNALD IDENTIFIERS
+
+The journald events-backend of Podman uses the following journald identifiers.  You can use the identifiers to filter Podman events directly with `journalctl`.
+
+| **Identifier**                | **Description**                                         |
+|-------------------------------|---------------------------------------------------------|
+| SYSLOG_IDENTIFIER             | Always set to "podman"                                  |
+| PODMAN_EVENT                  | The event status as described above                     |
+| PODMAN_TYPE                   | The event type as described above                       |
+| PODMAN_TIME                   | The time stamp when the event was written               |
+| PODMAN_NAME                   | Name of the event object (e.g., container, image)       |
+| PODMAN_ID                     | ID of the event object (e.g., container, image)         |
+| PODMAN_EXIT_CODE              | Exit code of the container                              |
+| PODMAN_POD_ID                 | Pod ID of the container                                 |
+| PODMAN_LABELS                 | Labels of the container                                 |
+| PODMAN_HEALTH_STATUS          | Health status of the container                          |
+| PODMAN_CONTAINER_INSPECT_DATA | The JSON payload of `podman-inspect` as described above |
+| PODMAN_NETWORK_NAME           | The name of the network                                 |
+
 ## EXAMPLES
 
 Showing Podman events
@@ -129,7 +169,7 @@ $ podman events
 
 Show only Podman create events
 ```
-$ podman events --filter event=create
+$ podman events -f event=create
 2019-03-02 10:36:01.375685062 -0600 CST container create 20dc581f6fbf (image=docker.io/library/alpine:latest, name=sharp_morse)
 2019-03-02 10:36:08.561188337 -0600 CST container create 58e7e002344c (image=k8s.gcr.io/pause:3.1, name=3e701f270d54-infra)
 2019-03-02 10:36:13.146899437 -0600 CST volume create cad6dc50e087 (image=, name=cad6dc50e0879568e7d656bd004bd343d6035e7fc4024e1711506fe2fd459e6f)

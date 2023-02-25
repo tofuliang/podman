@@ -20,7 +20,7 @@ var _ = Describe("Podman unshare", func() {
 			Skip("User namespaces not supported.")
 		}
 
-		if os.Geteuid() == 0 {
+		if !isRootless() {
 			Skip("Use unshare in rootless only")
 		}
 
@@ -94,7 +94,7 @@ var _ = Describe("Podman unshare", func() {
 		SkipIfNotRemote("check for podman-remote unshare error")
 		session := podmanTest.Podman([]string{"unshare"})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(Equal(`Error: cannot use command "podman-remote unshare" with the remote podman client`))
+		Expect(session).Should(Exit(125))
+		Expect(session.ErrorToString()).To(Equal(`Error: cannot use command "podman-remote unshare" with the remote podman client`))
 	})
 })

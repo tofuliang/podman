@@ -1,6 +1,7 @@
 package libpod
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/containers/podman/v4/libpod"
@@ -10,34 +11,34 @@ import (
 	"github.com/containers/podman/v4/pkg/domain/infra/abi"
 	"github.com/containers/podman/v4/pkg/util"
 	"github.com/gorilla/schema"
-	"github.com/pkg/errors"
 )
 
 func GenerateSystemd(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	query := struct {
-		Name             bool     `schema:"useName"`
-		New              bool     `schema:"new"`
-		NoHeader         bool     `schema:"noHeader"`
-		TemplateUnitFile bool     `schema:"templateUnitFile"`
-		RestartPolicy    *string  `schema:"restartPolicy"`
-		RestartSec       uint     `schema:"restartSec"`
-		StopTimeout      uint     `schema:"stopTimeout"`
-		StartTimeout     uint     `schema:"startTimeout"`
-		ContainerPrefix  *string  `schema:"containerPrefix"`
-		PodPrefix        *string  `schema:"podPrefix"`
-		Separator        *string  `schema:"separator"`
-		Wants            []string `schema:"wants"`
-		After            []string `schema:"after"`
-		Requires         []string `schema:"requires"`
+		Name                   bool     `schema:"useName"`
+		New                    bool     `schema:"new"`
+		NoHeader               bool     `schema:"noHeader"`
+		TemplateUnitFile       bool     `schema:"templateUnitFile"`
+		RestartPolicy          *string  `schema:"restartPolicy"`
+		RestartSec             uint     `schema:"restartSec"`
+		StopTimeout            uint     `schema:"stopTimeout"`
+		StartTimeout           uint     `schema:"startTimeout"`
+		ContainerPrefix        *string  `schema:"containerPrefix"`
+		PodPrefix              *string  `schema:"podPrefix"`
+		Separator              *string  `schema:"separator"`
+		Wants                  []string `schema:"wants"`
+		After                  []string `schema:"after"`
+		Requires               []string `schema:"requires"`
+		AdditionalEnvVariables []string `schema:"additionalEnvVariables"`
 	}{
 		StartTimeout: 0,
 		StopTimeout:  util.DefaultContainerConfig().Engine.StopTimeout,
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -58,25 +59,26 @@ func GenerateSystemd(w http.ResponseWriter, r *http.Request) {
 
 	containerEngine := abi.ContainerEngine{Libpod: runtime}
 	options := entities.GenerateSystemdOptions{
-		Name:             query.Name,
-		New:              query.New,
-		NoHeader:         query.NoHeader,
-		TemplateUnitFile: query.TemplateUnitFile,
-		RestartPolicy:    query.RestartPolicy,
-		StartTimeout:     &query.StartTimeout,
-		StopTimeout:      &query.StopTimeout,
-		ContainerPrefix:  ContainerPrefix,
-		PodPrefix:        PodPrefix,
-		Separator:        Separator,
-		RestartSec:       &query.RestartSec,
-		Wants:            query.Wants,
-		After:            query.After,
-		Requires:         query.Requires,
+		Name:                   query.Name,
+		New:                    query.New,
+		NoHeader:               query.NoHeader,
+		TemplateUnitFile:       query.TemplateUnitFile,
+		RestartPolicy:          query.RestartPolicy,
+		StartTimeout:           &query.StartTimeout,
+		StopTimeout:            &query.StopTimeout,
+		ContainerPrefix:        ContainerPrefix,
+		PodPrefix:              PodPrefix,
+		Separator:              Separator,
+		RestartSec:             &query.RestartSec,
+		Wants:                  query.Wants,
+		After:                  query.After,
+		Requires:               query.Requires,
+		AdditionalEnvVariables: query.AdditionalEnvVariables,
 	}
 
 	report, err := containerEngine.GenerateSystemd(r.Context(), utils.GetName(r), options)
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "error generating systemd units"))
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("generating systemd units: %w", err))
 		return
 	}
 
@@ -94,7 +96,7 @@ func GenerateKube(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -102,7 +104,7 @@ func GenerateKube(w http.ResponseWriter, r *http.Request) {
 	options := entities.GenerateKubeOptions{Service: query.Service}
 	report, err := containerEngine.GenerateKube(r.Context(), query.Names, options)
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "error generating YAML"))
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("generating YAML: %w", err))
 		return
 	}
 

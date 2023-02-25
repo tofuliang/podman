@@ -1,18 +1,18 @@
-From 8a8fa1a75e0fa3261263afbc8c2504feb430df6a Mon Sep 17 00:00:00 2001
+From 5e0eb222e83de4edb009bfe09ef34908cbdced01 Mon Sep 17 00:00:00 2001
 From: Ed Santiago <santiago@redhat.com>
-Date: Tue, 9 Feb 2021 17:28:05 -0700
+Date: Thu, 6 Oct 2022 17:32:59 -0600
 Subject: [PATCH] tweaks for running buildah tests under podman
 
 Signed-off-by: Ed Santiago <santiago@redhat.com>
 ---
- tests/helpers.bash | 69 ++++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 66 insertions(+), 3 deletions(-)
+ tests/helpers.bash | 80 +++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 76 insertions(+), 4 deletions(-)
 
 diff --git a/tests/helpers.bash b/tests/helpers.bash
-index e3087063..b3a8f5ee 100644
+index aab3f72e..7c82e37e 100644
 --- a/tests/helpers.bash
 +++ b/tests/helpers.bash
-@@ -51,6 +51,23 @@ EOF
+@@ -70,6 +70,30 @@ EOF
      ROOTDIR_OPTS="--root ${TEST_SCRATCH_DIR}/root --runroot ${TEST_SCRATCH_DIR}/runroot --storage-driver ${STORAGE_DRIVER}"
      BUILDAH_REGISTRY_OPTS="--registries-conf ${TEST_SOURCES}/registries.conf --registries-conf-dir ${TEST_SCRATCH_DIR}/registries.d --short-name-alias-conf ${TEST_SCRATCH_DIR}/cache/shortnames.conf"
      PODMAN_REGISTRY_OPTS="--registries-conf ${TEST_SOURCES}/registries.conf"
@@ -21,10 +21,17 @@ index e3087063..b3a8f5ee 100644
 +    PODMAN_NATIVE="${PODMAN_BINARY} ${ROOTDIR_OPTS} ${PODMAN_REGISTRY_OPTS}"
 +    if [[ -n "$REMOTE" ]]; then
 +        PODMAN_NATIVE="${PODMAN_BINARY%%-remote} ${ROOTDIR_OPTS} ${PODMAN_REGISTRY_OPTS}"
++        if [[ -n "$PODMAN_SERVER_LOG" ]]; then
++            (
++                echo "---------------------------------"
++                echo "- bats test ${BATS_TEST_NUMBER} : ${BATS_TEST_NAME}"
++            ) >> $PODMAN_SERVER_LOG
++        fi
++
 +        # static CONTAINERS_CONF needed for capabilities test. As of 2021-07-01
 +        # no tests in bud.bats override this; if at some point any test does
 +        # so, it will probably need to be skip_if_remote()d.
-+        env CONTAINERS_CONF=${CONTAINERS_CONF:-$(dirname ${BASH_SOURCE})/containers.conf} $PODMAN_NATIVE system service --timeout=0  &
++        env CONTAINERS_CONF=${CONTAINERS_CONF:-$(dirname ${BASH_SOURCE})/containers.conf} $PODMAN_NATIVE system service --log-level=info --timeout=0 &>>${PODMAN_SERVER_LOG:-/dev/stderr} &
 +        PODMAN_SERVER_PID=$!
 +        local timeout=10
 +        while ((timeout > 0)); do
@@ -36,7 +43,7 @@ index e3087063..b3a8f5ee 100644
  }
  
  function starthttpd() {
-@@ -94,6 +111,12 @@ function teardown_tests() {
+@@ -113,6 +137,12 @@ function teardown_tests() {
      stop_git_daemon
      stop_registry
  
@@ -49,24 +56,27 @@ index e3087063..b3a8f5ee 100644
      # Workaround for #1991 - buildah + overlayfs leaks mount points.
      # Many tests leave behind /var/tmp/.../root/overlay and sub-mounts;
      # let's find those and clean them up, otherwise 'rm -rf' fails.
-@@ -186,6 +209,10 @@ function podman() {
-     command ${PODMAN_BINARY:-podman} ${PODMAN_REGISTRY_OPTS} ${ROOTDIR_OPTS} "$@"
+@@ -202,7 +232,12 @@ function copy() {
  }
  
-+function podman-remote() {
-+    command ${PODMAN_BINARY:-podman-remote} ${ROOTDIR_OPTS} "$@"
-+}
-+
+ function podman() {
+-    command ${PODMAN_BINARY:-podman} ${PODMAN_REGISTRY_OPTS} ${ROOTDIR_OPTS} "$@"
++    local cmd=${PODMAN_BINARY:-podman}
++    local opts="${PODMAN_REGISTRY_OPTS} ${ROOTDIR_OPTS}"
++    if [[ $cmd =~ remote ]]; then
++        opts=
++    fi
++    command $cmd $opts "$@"
+ }
+ 
  # There are various scenarios where we would like to execute `tests` as rootless user, however certain commands like `buildah mount`
- # do not work in rootless session since a normal user cannot mount a filesystem unless they're in a user namespace along with its
- # own mount namespace. In order to run such specific commands from a rootless session we must perform `buildah unshare`.
-@@ -247,8 +274,35 @@ function run_buildah() {
+@@ -266,8 +301,36 @@ function run_buildah() {
          --retry)         retry=3;        shift;;  # retry network flakes
      esac
  
 +    local podman_or_buildah=${BUILDAH_BINARY}
 +    local _opts="${ROOTDIR_OPTS} ${BUILDAH_REGISTRY_OPTS}"
-+    if [[ $1 == "build" || $1 == "build-using-dockerfile" ]]; then
++    if [[ $1 == "build" || $1 == "build-using-dockerfile" || $1 == "bud" ]]; then
 +        shift
 +        # podman defaults to --layers=true; buildah to --false.
 +        # If command line includes explicit --layers, leave it untouched,
@@ -82,10 +92,11 @@ index e3087063..b3a8f5ee 100644
 +            _opts=
 +        fi
 +
-+        # podman always exits 125 where buildah exits 1 or 2 (or, in the
-+        # case of git, 128, which is a bug in git, but I won't harp on that).
++        # Special case: there's one test that invokes git in such
++        # a way that it exits 128 (which IMO is a bug in git).
++        # podman exits 125 in that case.
 +        case $expected_rc in
-+            1|2|128)   expected_rc=125 ;;
++            128)   expected_rc=125 ;;
 +        esac
 +    fi
 +    local cmd_basename=$(basename ${podman_or_buildah})
@@ -97,18 +108,18 @@ index e3087063..b3a8f5ee 100644
  
      # If session is rootless and `buildah mount` is invoked, perform unshare,
      # since normal user cannot mount a filesystem unless they're in a user namespace along with its own mount namespace.
-@@ -262,8 +316,8 @@ function run_buildah() {
+@@ -281,8 +344,8 @@ function run_buildah() {
          retry=$(( retry - 1 ))
  
          # stdout is only emitted upon error; this echo is to help a debugger
--        echo "\$ $BUILDAH_BINARY $*"
+-        echo "${_LOG_PROMPT} $BUILDAH_BINARY $*"
 -        run env CONTAINERS_CONF=${CONTAINERS_CONF:-$(dirname ${BASH_SOURCE})/containers.conf} timeout --foreground --kill=10 $BUILDAH_TIMEOUT ${BUILDAH_BINARY} ${BUILDAH_REGISTRY_OPTS} ${ROOTDIR_OPTS} "$@"
-+        echo "\$ $cmd_basename $*"
++        echo "${_LOG_PROMPT} $cmd_basename $*"
 +        run env CONTAINERS_CONF=${CONTAINERS_CONF:-$(dirname ${BASH_SOURCE})/containers.conf} timeout --foreground --kill=10 $BUILDAH_TIMEOUT ${podman_or_buildah} ${_opts} "$@"
          # without "quotes", multiple lines are glommed together into one
          if [ -n "$output" ]; then
              echo "$output"
-@@ -595,6 +649,15 @@ function skip_if_no_docker() {
+@@ -614,6 +677,15 @@ function skip_if_no_docker() {
    fi
  }
  
@@ -125,5 +136,5 @@ index e3087063..b3a8f5ee 100644
    daemondir=${TEST_SCRATCH_DIR}/git-daemon
    mkdir -p ${daemondir}/repo
 -- 
-2.35.1
+2.39.0
 

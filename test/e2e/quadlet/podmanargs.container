@@ -1,0 +1,9 @@
+## assert-podman-args "--foo"
+## assert-podman-args "--bar"
+## assert-podman-args "--also"
+
+[Container]
+Image=localhost/imagename
+PodmanArgs="--foo" \
+  --bar
+PodmanArgs=--also

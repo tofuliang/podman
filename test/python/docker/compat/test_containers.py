@@ -3,6 +3,8 @@ Integration tests for exercising docker-py against Podman Service.
 """
 import io
 import tarfile
+import threading
+import time
 from typing import IO, List, Optional
 
 from docker import errors
@@ -31,7 +33,7 @@ class TestContainers(common.DockerTestCase):
 
     def test_start_container(self):
         # Podman docs says it should give a 304 but returns with no response
-        # # Start a already started container should return 304
+        # # Start an already started container should return 304
         # response = self.docker.api.start(container=self.top_container_id)
         # self.assertEqual(error.exception.response.status_code, 304)
 
@@ -218,7 +220,7 @@ class TestContainers(common.DockerTestCase):
         _, out = ctr.exec_run(["stat", "-c", "%u:%g", "/workspace"])
         self.assertEqual(out.rstrip(), b"1042:1043", "UID/GID set in dockerfile")
 
-    def test_non_existant_workdir(self):
+    def test_non_existent_workdir(self):
         dockerfile = (
             b"FROM quay.io/libpod/alpine:latest\n"
             b"USER root\n"
@@ -231,7 +233,7 @@ class TestContainers(common.DockerTestCase):
             image=img.id,
             detach=True,
             command="top",
-            volumes=["test_non_existant_workdir:/workspace"],
+            volumes=["test_non_existent_workdir:/workspace"],
         )
         ctr.start()
         ret, _ = ctr.exec_run(["stat", "/workspace/scratch/test"])
@@ -260,3 +262,24 @@ class TestContainers(common.DockerTestCase):
                 ctr.remove()
             if vol is not None:
                 vol.remove(force=True)
+
+    def test_wait_next_exit(self):
+        self.skipTest("Skip until fix container-selinux#196 is available.")
+        ctr: Container = self.docker.containers.create(
+            image=constant.ALPINE,
+            name="test-exit",
+            command=["true"],
+            labels={"my-label": "0" * 250_000})
+
+        try:
+            def wait_and_start():
+                time.sleep(5)
+                ctr.start()
+
+            t = threading.Thread(target=wait_and_start)
+            t.start()
+            ctr.wait(condition="next-exit", timeout=300)
+            t.join()
+        finally:
+            ctr.stop()
+            ctr.remove(force=True)

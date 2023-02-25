@@ -188,12 +188,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//        A JSON encoded value of the filters (a `map[string][]string`) to process on the images list. Available filters:
 	//        - `is-automated=(true|false)`
 	//        - `is-official=(true|false)`
-	//        - `stars=<number>` Matches images that has at least 'number' stars.
+	//        - `stars=<number>` Matches images that have at least 'number' stars.
 	//  - in: query
 	//    name: tlsVerify
 	//    type: boolean
-	//    default: false
-	//    description: skip TLS verification for registries
+	//    default: true
+	//    description: Require HTTPS and verify signatures when contacting registries.
 	//  - in: query
 	//    name: listTags
 	//    type: boolean
@@ -503,7 +503,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    name: t
 	//    type: string
 	//    default: latest
-	//    description: A name and optional tag to apply to the image in the `name:tag` format. If you omit the tag the default latest value is assumed. You can provide several t parameters.
+	//    description: A name and optional tag to apply to the image in the `name:tag` format. If you omit the tag, the default latest value is assumed. You can provide several t parameters.
 	//  - in: query
 	//    name: extrahosts
 	//    type: string
@@ -702,9 +702,9 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     $ref: "#/responses/badParamError"
 	//   500:
 	//     $ref: "#/responses/internalError"
-	r.Handle(VersionedPath("/build"), s.APIHandler(compat.BuildImage)).Methods(http.MethodPost)
+	r.Handle(VersionedPath("/build"), s.StreamBufferedAPIHandler(compat.BuildImage)).Methods(http.MethodPost)
 	// Added non version path to URI to support docker non versioned paths
-	r.Handle("/build", s.APIHandler(compat.BuildImage)).Methods(http.MethodPost)
+	r.Handle("/build", s.StreamBufferedAPIHandler(compat.BuildImage)).Methods(http.MethodPost)
 	/*
 		libpod endpoints
 	*/
@@ -728,6 +728,11 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: tlsVerify
 	//    description: Require TLS verification.
+	//    type: boolean
+	//    default: true
+	//  - in: query
+	//    name: quiet
+	//    description: "silences extra stream data on push"
 	//    type: boolean
 	//    default: true
 	//  - in: header
@@ -948,6 +953,10 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     name: ignore
 	//     description: Ignore if a specified image does not exist and do not throw an error.
 	//     type: boolean
+	//   - in: query
+	//     name: lookupManifest
+	//     description: Resolves to manifest list instead of image.
+	//     type: boolean
 	// produces:
 	// - application/json
 	// responses:
@@ -1107,12 +1116,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//        A JSON encoded value of the filters (a `map[string][]string`) to process on the images list. Available filters:
 	//        - `is-automated=(true|false)`
 	//        - `is-official=(true|false)`
-	//        - `stars=<number>` Matches images that has at least 'number' stars.
+	//        - `stars=<number>` Matches images that have at least 'number' stars.
 	//  - in: query
 	//    name: tlsVerify
 	//    type: boolean
-	//    default: false
-	//    description: skip TLS verification for registries
+	//    default: true
+	//    description: Require HTTPS and verify signatures when contacting registries.
 	//  - in: query
 	//    name: listTags
 	//    type: boolean
@@ -1397,7 +1406,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    name: t
 	//    type: string
 	//    default: latest
-	//    description: A name and optional tag to apply to the image in the `name:tag` format.  If you omit the tag the default latest value is assumed. You can provide several t parameters.
+	//    description: A name and optional tag to apply to the image in the `name:tag` format.  If you omit the tag, the default latest value is assumed. You can provide several t parameters.
 	//  - in: query
 	//    name: allplatforms
 	//    type: boolean
@@ -1595,6 +1604,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    type: array
 	//    items:
 	//      type: string
+	//  - in: query
+	//    name: volume
+	//    description: Extra volumes that should be mounted in the build container.
+	//    type: array
+	//    items:
+	//      type: string
 	// produces:
 	// - application/json
 	// responses:
@@ -1615,5 +1630,39 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//   500:
 	//     $ref: "#/responses/internalError"
 	r.Handle(VersionedPath("/libpod/build"), s.APIHandler(compat.BuildImage)).Methods(http.MethodPost)
+
+	// swagger:operation POST /libpod/images/scp/{name} libpod ImageScpLibpod
+	// ---
+	// tags:
+	//  - images
+	// summary: Copy an image from one host to another
+	// description: Copy an image from one host to another
+	// parameters:
+	//   - in: path
+	//     name: name
+	//     required: true
+	//     description: source connection/image
+	//     type: string
+	//   - in: query
+	//     name: destination
+	//     required: false
+	//     description: dest connection/image
+	//     type: string
+	//   - in: query
+	//     name: quiet
+	//     required: false
+	//     description: quiet output
+	//     type: boolean
+	//     default: false
+	// produces:
+	// - application/json
+	// responses:
+	//   200:
+	//     $ref: "#/responses/imagesScpResponseLibpod"
+	//   400:
+	//     $ref: "#/responses/badParamError"
+	//   500:
+	//     $ref: '#/responses/internalError'
+	r.Handle(VersionedPath("/libpod/images/scp/{name:.*}"), s.APIHandler(libpod.ImageScp)).Methods(http.MethodPost)
 	return nil
 }

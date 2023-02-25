@@ -9,7 +9,7 @@ t POST "images/create?fromImage=quay.io/libpod/alpine:latest" 200 .error~null .s
 # 14291 - let a short-name resolve to a *local* non Docker-Hub image.
 t POST containers/create Image=alpine 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
-t GET containers/$cid/json 200 .Image="quay.io/libpod/alpine:latest"
+t GET containers/$cid/json 200 .Config.Image="quay.io/libpod/alpine:latest" .Image~sha256:[0-9a-f]\\{64\\}
 podman rm -f $cid
 
 ########## TAG
@@ -33,18 +33,8 @@ RUN  touch /foo
 EOF
     tar --format=posix -C $TMPD -cvf ${CONTAINERFILE_TAR} containerfile &> /dev/null
 
-    curl -XPOST --data-binary @<(cat $CONTAINERFILE_TAR) \
-        -H "content-type: application/x-tar" \
-        --dump-header "${TMPD}/headers.txt" \
-        -o "${TMPD}/response.txt" \
-        "http://$HOST:$PORT/build?dockerfile=containerfile&t=$tag" &> /dev/null
-
-    if ! grep -q '200 OK' "${TMPD}/headers.txt"; then
-        cat "${TMPD}/headers.txt"
-        cat "${TMPD}/response.txt"
-        echo -e "${red}NOK: Image build from tar failed response was not 200 OK (application/x-tar)"
-        exit 1
-    fi
+    t POST "/build?dockerfile=containerfile&t=$tag" $CONTAINERFILE_TAR 200 \
+      .stream~".*Successfully tagged .*"
 
     rm -rf $TMPD
     t DELETE "images/$fqn" 200
@@ -128,7 +118,7 @@ t DELETE "containers/$cid"                                                      
 # disable the docker.io enforcement.
 
 stop_service
-CONTAINERS_CONF=$(pwd)/test/apiv2/containers.conf start_service
+CONTAINERS_CONF=$TESTS_DIR/containers.conf start_service
 
 t POST   "images/create?fromImage=quay.io/libpod/alpine:latest"       200 .error~null .status~".*Download complete.*"
 t POST   "images/alpine/tag?repo=foo"                                 201

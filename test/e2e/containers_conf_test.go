@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,8 +113,8 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		Expect(result).Should(Exit(0))
 		Expect(result.Out.Contents()).To(
 			And(
-				ContainSubstring("SYS_CHROOT"),
-				ContainSubstring("NET_RAW"),
+				ContainSubstring("FOWNER"),
+				ContainSubstring("SETFCAP"),
 			))
 	})
 
@@ -131,8 +130,8 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		Expect(result).Should(Exit(0))
 		Expect(result.Out.Contents()).ToNot(
 			And(
-				ContainSubstring("SYS_CHROOT"),
-				ContainSubstring("NET_RAW"),
+				ContainSubstring("SETUID"),
+				ContainSubstring("FOWNER"),
 			))
 	})
 
@@ -208,7 +207,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		tempdir, err = CreateTempDirInTempDir()
 		Expect(err).ToNot(HaveOccurred())
 
-		err := ioutil.WriteFile(conffile, []byte(fmt.Sprintf("[containers]\nvolumes=[\"%s:%s:Z\",]\n", tempdir, tempdir)), 0755)
+		err := os.WriteFile(conffile, []byte(fmt.Sprintf("[containers]\nvolumes=[\"%s:%s:Z\",]\n", tempdir, tempdir)), 0755)
 		Expect(err).ToNot(HaveOccurred())
 
 		os.Setenv("CONTAINERS_CONF", conffile)
@@ -406,7 +405,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 
 		profile := filepath.Join(podmanTest.TempDir, "seccomp.json")
 		containersConf := []byte(fmt.Sprintf("[containers]\nseccomp_profile=\"%s\"", profile))
-		err = ioutil.WriteFile(configPath, containersConf, os.ModePerm)
+		err = os.WriteFile(configPath, containersConf, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 
 		if IsRemote() {
@@ -420,6 +419,17 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 	})
 
 	It("add image_copy_tmp_dir", func() {
+		// Prevents overwriting of TMPDIR environment
+		if cacheDir, found := os.LookupEnv("TMPDIR"); found {
+			defer os.Setenv("TMPDIR", cacheDir)
+			os.Unsetenv("TMPDIR")
+		} else {
+			defer os.Unsetenv("TMPDIR")
+		}
+		if IsRemote() {
+			podmanTest.RestartRemoteService()
+		}
+
 		session := podmanTest.Podman([]string{"info", "--format", "{{.Store.ImageCopyTmpDir}}"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -430,7 +440,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		os.Setenv("CONTAINERS_CONF", configPath)
 
 		containersConf := []byte("[engine]\nimage_copy_tmp_dir=\"/foobar\"")
-		err = ioutil.WriteFile(configPath, containersConf, os.ModePerm)
+		err = os.WriteFile(configPath, containersConf, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 
 		if IsRemote() {
@@ -443,7 +453,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		Expect(session.OutputToString()).To(Equal("/foobar"))
 
 		containersConf = []byte(fmt.Sprintf("[engine]\nimage_copy_tmp_dir=%q", storagePath))
-		err = ioutil.WriteFile(configPath, containersConf, os.ModePerm)
+		err = os.WriteFile(configPath, containersConf, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 		if IsRemote() {
 			podmanTest.RestartRemoteService()
@@ -455,7 +465,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		Expect(session.Out.Contents()).To(ContainSubstring(storagePath))
 
 		containersConf = []byte("[engine]\nimage_copy_tmp_dir=\"storage1\"")
-		err = ioutil.WriteFile(configPath, containersConf, os.ModePerm)
+		err = os.WriteFile(configPath, containersConf, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 
 		if !IsRemote() {
@@ -463,6 +473,13 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 			session.WaitWithDefaultTimeout()
 			Expect(session).Should(Exit(125))
 			Expect(session.Err.Contents()).To(ContainSubstring("invalid image_copy_tmp_dir value \"storage1\" (relative paths are not accepted)"))
+
+			os.Setenv("TMPDIR", "/hoge")
+			session = podmanTest.Podman([]string{"info", "--format", "{{.Store.ImageCopyTmpDir}}"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+			Expect(session.OutputToString()).To(Equal("/hoge"))
+			os.Unsetenv("TMPDIR")
 		}
 	})
 
@@ -485,7 +502,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		os.Setenv("CONTAINERS_CONF", configPath)
 
 		containersConf := []byte("[engine]\ninfra_image=\"" + infra1 + "\"")
-		err = ioutil.WriteFile(configPath, containersConf, os.ModePerm)
+		err = os.WriteFile(configPath, containersConf, os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 
 		if IsRemote() {
@@ -520,7 +537,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 		os.Setenv("CONTAINERS_CONF", configPath)
 		defer os.Remove(configPath)
 
-		err := ioutil.WriteFile(configPath, []byte("[engine]\nremote=true"), os.ModePerm)
+		err := os.WriteFile(configPath, []byte("[engine]\nremote=true"), os.ModePerm)
 		Expect(err).ToNot(HaveOccurred())
 
 		// podmanTest.Podman() cannot be used as it was initialized remote==false
@@ -535,11 +552,12 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 
 	It("podman containers.conf cgroups=disabled", func() {
 		if !strings.Contains(podmanTest.OCIRuntime, "crun") {
-			Skip("FIXME: requires crun")
+			// Assume this will never be fixed in runc
+			Skip("NoCgroups requires crun")
 		}
 
 		conffile := filepath.Join(podmanTest.TempDir, "container.conf")
-		err := ioutil.WriteFile(conffile, []byte("[containers]\ncgroups=\"disabled\"\n"), 0755)
+		err := os.WriteFile(conffile, []byte("[containers]\ncgroups=\"disabled\"\n"), 0755)
 		Expect(err).ToNot(HaveOccurred())
 
 		result := podmanTest.Podman([]string{"create", ALPINE, "true"})
@@ -571,7 +589,7 @@ var _ = Describe("Verify podman containers.conf usage", func() {
 	It("podman containers.conf runtime", func() {
 		SkipIfRemote("--runtime option is not available for remote commands")
 		conffile := filepath.Join(podmanTest.TempDir, "container.conf")
-		err := ioutil.WriteFile(conffile, []byte("[engine]\nruntime=\"testruntime\"\n"), 0755)
+		err := os.WriteFile(conffile, []byte("[engine]\nruntime=\"testruntime\"\n"), 0755)
 		Expect(err).ToNot(HaveOccurred())
 
 		os.Setenv("CONTAINERS_CONF", conffile)

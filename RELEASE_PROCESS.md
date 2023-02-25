@@ -7,7 +7,7 @@ standards](https://semver.org).
 Significant versions
 are tagged, including *release candidates* (`rc`).
 All relevant **minor** releases (`vX.Y`) have their own branches.  The **latest**
-development efforts occur on the *master* branch.  Branches with a
+development efforts occur on the *main* branch.  Branches with a
 *rhel* suffix are use for long-term support of downstream RHEL releases.
 
 ## Release workflow expectations
@@ -27,7 +27,7 @@ development efforts occur on the *master* branch.  Branches with a
 
 ## Major (***X***.y.z) release
 
-These releases always begin from *master*, and are contained in a branch
+These releases always begin from *main*, and are contained in a branch
 named with the **major** and **minor** version. **Major** release branches
 begin in a *release candidate* phase, with prospective release tags being
 created with an `-rc` suffix.  There may be multiple *release candidate*
@@ -36,7 +36,7 @@ tags before the final/official **major** version is tagged and released.
 ## Significant minor (x.**Y**.z) and patch (x.y.**Z**) releases
 
 Significant **minor** and **patch** level releases are normally
-branched from *master*, but there are occsaional exceptions.
+branched from *main*, but there are occsaional exceptions.
 Additionally, these branches may be named with `-rhel` (or another)
 suffix to signify a specialized purpose.  For example, `-rhel` indicates
 a release intended for downstream *RHEL* consumption.
@@ -61,7 +61,7 @@ spelled with complete minutiae.
       processing of release notes.  Ensure your local clone is fully up to
       date with the remote upstream (`git remote update`).
    1. Check out (create) a local working branch for a release-notes PR,
-      based on the latest `upstream/master` or pre-existing version-named
+      based on the latest `upstream/main` or pre-existing version-named
       branch - for example, if this is an additional *release-candidate*
       you might use `vX.Y.Z-rc2`;  **Note** this is a local branch name,
       an upstream branch would never contain the `-rc?` suffix.
@@ -94,14 +94,14 @@ spelled with complete minutiae.
       actual version numbers).
    1. Push your working branch to your github fork and create a new pull request.
 
-      * ***Ensure*** you properly select the base branch if not *master*.
+      * ***Ensure*** you properly select the base branch if not *main*.
         For example, `vX.y.Z`.
       * ***Before submitting*** the new PR, update the title with the
         prefix `[CI:DOCS]` to avoid triggering lengthy automated testing.
 
    1. If this is a release on a pre-existing version-named branch
       (e.x. *release-candidate* or `-rhel`), open another PR against
-      the upstream *master* branch.  This is needed to ensure the new
+      the upstream *main* branch.  This is needed to ensure the new
       notes are present for future releases.
 
 
@@ -112,8 +112,8 @@ spelled with complete minutiae.
       release, and no new features land after the *release-candidate* phases
       are complete.
    1. Ensure your local clone is fully up to date with the remote upstream
-      (`git remote update`).  Switch to this branch (`git checkout upstream/master`).
-   1. Make a new local branch for the release based on *master*.  For example,
+      (`git remote update`).  Switch to this branch (`git checkout upstream/main`).
+   1. Make a new local branch for the release based on *main*.  For example,
       `git checkout -b vX.Y`.  Where `X.Y` represent the complete release
       version-name, including any suffix (if any) like `-rhel`.  ***DO NOT***
       include any `-rc` suffix in the branch name.
@@ -129,7 +129,7 @@ spelled with complete minutiae.
       failures.  This can be done by going directly to
       `https://cirrus-ci.com/github/containers/podman/vX.Y`
    1. If there are CI test or automation boops that need fixing on the branch,
-      attend to them using normal PR process (to *master* first, then backport
+      attend to them using normal PR process (to *main* first, then backport
       changes to the new branch).  Ideally, CI should be "green" on the new
       branch before proceeding.
 
@@ -162,7 +162,7 @@ spelled with complete minutiae.
       release branch (`git checkout upstream/vX.Y`).
    1. Create a new local working-branch to develop the release PR,
       `git checkout -b bump_vX.Y.Z`.
-   1. Lookup the *COMMIT ID* of the last release,
+   1. Look up the *COMMIT ID* of the last release,
       `git log -1 $(git tag | sort -V | tail -1)`.
    1. Edit `version/version.go` and bump the `Version` value to the new
       release version.  If there were API changes, also bump `APIVersion` value.
@@ -220,15 +220,15 @@ spelled with complete minutiae.
       "View All Tasks".
    1. Keep this page open to monitor its progress and for use in future steps.
 
-1. Bump master `-dev` version
+1. Bump main `-dev` version
 
    1. If you made a release branch and bumped **major** or **minor** version
       Complete the "Update version numbers and push tag" steps above on the
-      *master* branch.  Bump the **minor** version and set the **patch**
-      version to 0.  For example, after pushing the v2.2.0 release, *master*
+      *main* branch.  Bump the **minor** version and set the **patch**
+      version to 0.  For example, after pushing the v2.2.0 release, *main*
       should be set to v2.3.0-dev.
    1. Create a "Bump to vX.Y.Z-dev" commit with these changes.
-   1. Bump the version number in `README.md` (still on on *master*)
+   1. Bump the version number in `README.md` (still on on *main*)
       to reflect the new release.  Commit these changes.
    1. Create a PR with the above commits, and oversee it's merging.
 
@@ -244,22 +244,25 @@ spelled with complete minutiae.
       $ make podman-remote-release-darwin_amd64.zip \
           podman-remote-release-darwin_arm64.zip \
           podman-remote-release-windows_amd64.zip \
-          podman.msi \
-          podman-remote-static
+          podman-remote-static-linux_amd64 \
+          podman-remote-static-linux_arm64
       $ mv podman-* bin/
       $ cd bin/
-      $ tar -cvzf podman-remote-static.tar.gz podman-remote-static
-      $ sha256sum *.zip *.msi *.tar.gz > shasums
+      $ tar -cvzf podman-remote-static-linux_amd64.tar.gz podman-remote-static-linux_amd64
+      $ tar -cvzf podman-remote-static-linux_arm64.tar.gz podman-remote-static-linux_arm64
+      $ sha256sum *.zip *.tar.gz > shasums
       ```
 
    1. The `podman-vX.Y.Z.dmg` file is produced manually by someone in
       possession of a developer signing key.
    1. In the directory where you downloaded the archives, run
-      `sha256sum *.tar.gz *.zip *.msi > shasums` to generate SHA sums.
+      `sha256sum *.tar.gz *.zip > shasums` to generate SHA sums.
    1. Go to `https://github.com/containers/podman/releases/tag/vX.Y.Z` and
       press the "Edit Release" button.  Change the name to the form `vX.Y.Z`
    1. If this is a release candidate be certain to click the pre-release
       checkbox at the bottom of the page.
+   1. If this new release will be the latest version released, be certain to
+      click the latest release checkbox at the bottom of the page.
    1. Copy and paste the release notes for the release into the body of
       the release.
    1. Near the bottom of the page there is a box with the message
@@ -271,6 +274,37 @@ spelled with complete minutiae.
       * podman-remote-release-darwin_arm64.zip
       * podman-remote-release-windows_amd64.zip
       * podman-vX.Y.Z.msi
-      * podman-remote-static.tar.gz
+      * podman-remote-static-linux_amd64.tar.gz
+      * podman-remote-static-linux_arm64.tar.gz
       * shasums
-   1. Save the release.
+   1. Click the Publish button to make the release (or pre-release)
+      available.
+   1. Check the "Actions" tab, after the publish you should see a job
+      automatically launch to build the windows installer (named after
+      the release). There may be more than one running due to the multiple
+      event states triggered, but this can be ignored, as any duplicates
+      will gracefully back-off. The job takes 5-6 minutes to complete.
+   1. Confirm the podman-[version]-setup.exe file is now on the release
+      page. This might not be the case if you accidentally published the
+      release before uploading the binaries, as the job may look before
+      they are available. If that happens, you can either manually kick
+      off the job (see below), or just make a harmless edit to the
+      release (e.g. add an extra whitespace character somewhere). As
+      long as the body content is different in some way, a new run will
+      be triggered.
+
+      ## Manually Triggering Windows Installer Build & Upload
+
+
+      ### *CLI Approach*
+      1. Install the GitHub CLI (e.g. `sudo dnf install gh`)
+      1. Run (replacing below version number to release version)
+         ```
+         gh workflow run "Upload Windows Installer" -F version="4.2.0"
+         ```
+      ### *GUI Approach*
+      1. Go to the "Actions" tab
+      1. On the left pick the "Update Windows Installer" category
+      1. A blue box will appear above the job list with a right side drop
+         -down. Click the drop-down and specify the version number in the
+         dialog that appears

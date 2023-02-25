@@ -1,4 +1,4 @@
-% podman-secret-inspect(1)
+% podman-secret-inspect 1
 
 ## NAME
 podman\-secret\-inspect - Display detailed information on one or more secrets
@@ -15,13 +15,29 @@ Secrets can be queried individually by providing their full name or a unique par
 
 ## OPTIONS
 
-#### **--format**=*format*
+#### **--format**, **-f**=*format*
 
 Format secret output using Go template.
+
+| **Placeholder**          | **Description**                                                   |
+|--------------------------|-------------------------------------------------------------------|
+| .CreatedAt               | When secret was created (relative timestamp, human-readable)      |
+| .ID                      | ID of secret                                                      |
+| .Spec                    | Details of secret                                                 |
+| .Spec.Driver             | Driver info                                                       |
+| .Spec.Driver.Name        | Driver name (string)                                              |
+| .Spec.Driver.Options ... | Driver options (map of driver-specific options)                   |
+| .Spec.Labels             | Labels for this secret                                            |
+| .Spec.Name               | Name of secret                                                    |
+| .UpdatedAt               | When secret was last updated (relative timestamp, human-readable) |
 
 #### **--help**
 
 Print usage statement.
+
+#### **--pretty**
+
+Print inspect output in human-readable format
 
 
 ## EXAMPLES

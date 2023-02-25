@@ -39,7 +39,7 @@ var _ = Describe("Podman diff", func() {
 		session := podmanTest.Podman([]string{"diff", ALPINE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(len(session.OutputToStringArray())).To(BeNumerically(">", 0))
+		Expect(session.OutputToStringArray()).ToNot(BeEmpty())
 	})
 
 	It("podman diff bogus image", func() {
@@ -93,9 +93,9 @@ var _ = Describe("Podman diff", func() {
 	})
 
 	It("podman image diff", func() {
-		file1 := "/" + stringid.GenerateNonCryptoID()
-		file2 := "/" + stringid.GenerateNonCryptoID()
-		file3 := "/" + stringid.GenerateNonCryptoID()
+		file1 := "/" + stringid.GenerateRandomID()
+		file2 := "/" + stringid.GenerateRandomID()
+		file3 := "/" + stringid.GenerateRandomID()
 
 		// Create container image with the files
 		containerfile := fmt.Sprintf(`
@@ -135,7 +135,7 @@ RUN echo test
 		session := podmanTest.Podman([]string{"image", "diff", BB})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(len(session.OutputToStringArray())).To(BeNumerically(">", 0))
+		Expect(session.OutputToStringArray()).ToNot(BeEmpty())
 	})
 
 	It("podman image diff bogus image", func() {
@@ -152,8 +152,8 @@ RUN echo test
 	})
 
 	It("podman diff container and image with same name", func() {
-		imagefile := "/" + stringid.GenerateNonCryptoID()
-		confile := "/" + stringid.GenerateNonCryptoID()
+		imagefile := "/" + stringid.GenerateRandomID()
+		confile := "/" + stringid.GenerateRandomID()
 
 		// Create container image with the files
 		containerfile := fmt.Sprintf(`

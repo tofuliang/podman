@@ -30,6 +30,11 @@ EOF
 }
 
 @test "podman buildx - basic test" {
+    run_podman info --format "{{.Store.GraphDriverName}}"
+    if [[ "$output" == "vfs" ]]; then
+        skip "Test not supported with VFS podman storage driver (#17520)"
+    fi
+
     rand_filename=$(random_string 20)
     rand_content=$(random_string 50)
 
@@ -42,6 +47,12 @@ RUN echo $rand_content > /$rand_filename
 VOLUME /a/b/c
 VOLUME ['/etc/foo', '/etc/bar']
 EOF
+
+    run_podman info --format '{{ .Host.BuildahVersion}}'
+    BUILDAH_VERSION=$output
+
+    run_podman buildx version
+    is "$output" "buildah ${BUILDAH_VERSION}" "buildx version contains Buildah version"
 
     run_podman buildx build --load -t build_test --format=docker $tmpdir
     is "$output" ".*COMMIT" "COMMIT seen in log"
@@ -93,6 +104,12 @@ EOF
 
     run_podman run --rm build_test cat /$rand_filename
     is "$output"   "$rand_content"   "reading generated file in image"
+
+    run_podman rmi -f build_test
+
+    # Now try without specifying a context dir
+    run_podman build -t build_test -f - < $containerfile
+    is "$output" ".*COMMIT" "COMMIT seen in log"
 
     run_podman rmi -f build_test
 }
@@ -246,7 +263,7 @@ EOF
     # Now test COPY. That should fail.
     sed -i -e 's/ADD/COPY/' $tmpdir/Dockerfile
     run_podman 125 build -t copy_url $tmpdir
-    is "$output" ".*error building at STEP .*: source can't be a URL for COPY"
+    is "$output" ".* building at STEP .*: source can't be a URL for COPY"
 }
 
 
@@ -385,7 +402,7 @@ EOF
     if is_remote; then
         ENVHOST=""
     else
-	ENVHOST="--env-host"
+        ENVHOST="--env-host"
     fi
 
     # Run without args - should run the above script. Verify its output.
@@ -496,7 +513,12 @@ Labels.$label_name | $label_value
        "image tree: third line"
     is "${lines[3]}" "Image Layers" \
        "image tree: fourth line"
-    is "${lines[4]}" ".* ID: [0-9a-f]\{12\} Size: .* Top Layer of: \[$IMAGE]" \
+    # FIXME: if #14536 is ever fixed, rebuild testimage & s/5/4/ below.
+    # Summary: this should be ${lines[4]}, not [5], and prior to 2022-06-15
+    # it was. Unfortunately, a nightmarish bug interaction makes it impossible
+    # for us to use --squash-all on our testimage. Unless/until that bug is
+    # fixed, we have an extra layer that all we can do is ignore.
+    is "${lines[5]}" ".* ID: [0-9a-f]\{12\} Size: .* Top Layer of: \[$IMAGE]" \
        "image tree: first layer line"
     is "${lines[-1]}"  ".* ID: [0-9a-f]\{12\} Size: .* Top Layer of: \[localhost/build_test:latest]" \
        "image tree: last layer line"
@@ -536,7 +558,7 @@ Labels.$label_name | $label_value
          this-file-does-not-match-anything-in-ignore-file
          comment
     )
-    for f in ${files[@]}; do
+    for f in "${files[@]}"; do
         # The magic '##-' strips off the '-' prefix
         echo "$f" > $tmpdir/${f##-}
     done
@@ -567,7 +589,7 @@ EOF
 
         # Build an image. For .dockerignore
         local -a ignoreflag
-	unset ignoreflag
+        unset ignoreflag
         if [[ $ignorefile != ".dockerignore" ]]; then
             ignoreflag="--ignorefile $tmpdir/$ignorefile"
         fi
@@ -757,7 +779,7 @@ EOF
         is "$output" "[no instance of 'Using cache']" "no cache used"
     fi
 
-    run_podman rmi -a --force
+    run_podman rmi -f build_test
 }
 
 # Caveat lector: this test was mostly copy-pasted from buildah in #9275.
@@ -848,7 +870,7 @@ EOF
 
     run_podman 125 build -t build_test --pull-never $tmpdir
     is "$output" \
-       ".*Error: error creating build container: quay.io/libpod/nosuchimage:nosuchtag: image not known" \
+       ".*Error: creating build container: quay.io/libpod/nosuchimage:nosuchtag: image not known" \
        "--pull-never fails with expected error message"
 }
 
@@ -983,7 +1005,7 @@ COPY ./ ./
 COPY subdir ./
 EOF
     run_podman 125 build -t build_test $tmpdir
-    is "$output" ".*Error: error building at STEP \"COPY subdir ./\"" ".dockerignore was ignored"
+    is "$output" ".*Error: building at STEP \"COPY subdir ./\"" ".dockerignore was ignored"
 }
 
 @test "podman build .containerignore and .dockerignore test" {
@@ -1012,14 +1034,14 @@ EOF
 
     touch $tmpdir/empty-file.txt
     if is_remote && ! is_rootless ; then
-	# TODO: set this file's owner to a UID:GID that will not be mapped
-	# in the context where the remote server is running, which generally
-	# requires us to be root (or running with more mapped IDs) on the
-	# client, but not root (or running with fewer mapped IDs) on the
-	# remote server
-	# 4294967292:4294967292 (0xfffffffc:0xfffffffc) isn't that, but
-	# it will catch errors where a remote server doesn't apply the right
-	# default as it copies content into the container
+        # TODO: set this file's owner to a UID:GID that will not be mapped
+        # in the context where the remote server is running, which generally
+        # requires us to be root (or running with more mapped IDs) on the
+        # client, but not root (or running with fewer mapped IDs) on the
+        # remote server
+        # 4294967292:4294967292 (0xfffffffc:0xfffffffc) isn't that, but
+        # it will catch errors where a remote server doesn't apply the right
+        # default as it copies content into the container
         chown 4294967292:4294967292 $tmpdir/empty-file.txt
     fi
     cat >$tmpdir/Dockerfile <<EOF

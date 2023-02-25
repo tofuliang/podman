@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,7 +23,7 @@ var _ = Describe("Podman create", func() {
 
 	BeforeEach(func() {
 		tempdir, err = CreateTempDirInTempDir()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		podmanTest = PodmanTestCreate(tempdir)
 		podmanTest.Setup()
 	})
@@ -63,7 +62,7 @@ var _ = Describe("Podman create", func() {
 
 		lock := GetPortLock("5000")
 		defer lock.Unlock()
-		session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", "5000:5000", registry, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
+		session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", "5000:5000", REGISTRY_IMAGE, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -147,20 +146,16 @@ var _ = Describe("Podman create", func() {
 	It("podman create --mount flag with multiple mounts", func() {
 		vol1 := filepath.Join(podmanTest.TempDir, "vol-test1")
 		err := os.MkdirAll(vol1, 0755)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		vol2 := filepath.Join(podmanTest.TempDir, "vol-test2")
 		err = os.MkdirAll(vol2, 0755)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"create", "--name", "test", "--mount", "type=bind,src=" + vol1 + ",target=/myvol1,z", "--mount", "type=bind,src=" + vol2 + ",target=/myvol2,z", ALPINE, "touch", "/myvol2/foo.txt"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		session = podmanTest.Podman([]string{"start", "test"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-
-		session = podmanTest.Podman([]string{"logs", "test"})
+		session = podmanTest.Podman([]string{"start", "-a", "test"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).ToNot(ContainSubstring("cannot touch"))
@@ -170,41 +165,30 @@ var _ = Describe("Podman create", func() {
 		if podmanTest.Host.Arch == "ppc64le" {
 			Skip("skip failing test on ppc64le")
 		}
-		// NOTE: we force the k8s-file log driver to make sure the
-		// tests are passing inside a container.
 
 		mountPath := filepath.Join(podmanTest.TempDir, "secrets")
 		err := os.Mkdir(mountPath, 0755)
 		Expect(err).ToNot(HaveOccurred())
-		session := podmanTest.Podman([]string{"create", "--log-driver", "k8s-file", "--name", "test", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test", mountPath), ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
+		session := podmanTest.Podman([]string{"create", "--name", "test", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test", mountPath), ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"start", "test"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"logs", "test"})
+		session = podmanTest.Podman([]string{"start", "-a", "test"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("/create/test rw"))
 
-		session = podmanTest.Podman([]string{"create", "--log-driver", "k8s-file", "--name", "test_ro", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test,ro", mountPath), ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
+		session = podmanTest.Podman([]string{"create", "--name", "test_ro", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test,ro", mountPath), ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"start", "test_ro"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"logs", "test_ro"})
+		session = podmanTest.Podman([]string{"start", "-a", "test_ro"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("/create/test ro"))
 
-		session = podmanTest.Podman([]string{"create", "--log-driver", "k8s-file", "--name", "test_shared", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test,shared", mountPath), ALPINE, "awk", `$5 == "/create/test" { print $6 " " $7}`, "/proc/self/mountinfo"})
+		session = podmanTest.Podman([]string{"create", "--name", "test_shared", "--mount", fmt.Sprintf("type=bind,src=%s,target=/create/test,shared", mountPath), ALPINE, "awk", `$5 == "/create/test" { print $6 " " $7}`, "/proc/self/mountinfo"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"start", "test_shared"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"logs", "test_shared"})
+		session = podmanTest.Podman([]string{"start", "-a", "test_shared"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("rw"))
@@ -213,13 +197,10 @@ var _ = Describe("Podman create", func() {
 		mountPath = filepath.Join(podmanTest.TempDir, "scratchpad")
 		err = os.Mkdir(mountPath, 0755)
 		Expect(err).ToNot(HaveOccurred())
-		session = podmanTest.Podman([]string{"create", "--log-driver", "k8s-file", "--name", "test_tmpfs", "--mount", "type=tmpfs,target=/create/test", ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
+		session = podmanTest.Podman([]string{"create", "--name", "test_tmpfs", "--mount", "type=tmpfs,target=/create/test", ALPINE, "grep", "/create/test", "/proc/self/mountinfo"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"start", "test_tmpfs"})
-		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(0))
-		session = podmanTest.Podman([]string{"logs", "test_tmpfs"})
+		session = podmanTest.Podman([]string{"start", "-a", "test_tmpfs"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("/create/test rw,nosuid,nodev,relatime - tmpfs"))
@@ -242,8 +223,8 @@ var _ = Describe("Podman create", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(125))
 
-		tmpDir, err := ioutil.TempDir("", "")
-		Expect(err).To(BeNil())
+		tmpDir, err := os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
 		podName := "rudolph"
@@ -273,7 +254,7 @@ var _ = Describe("Podman create", func() {
 
 	It("podman run entrypoint and cmd test", func() {
 		name := "test101"
-		create := podmanTest.Podman([]string{"create", "--name", name, redis})
+		create := podmanTest.Podman([]string{"create", "--name", name, REDIS_IMAGE})
 		create.WaitWithDefaultTimeout()
 		Expect(create).Should(Exit(0))
 
@@ -438,6 +419,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("podman create with -m 1000000 sets swap to 2000000", func() {
+		SkipIfRootlessCgroupsV1("Not supported for rootless + CgroupsV1")
 		numMem := 1000000
 		ctrName := "testCtr"
 		session := podmanTest.Podman([]string{"create", "-t", "-m", fmt.Sprintf("%db", numMem), "--name", ctrName, ALPINE, "/bin/sh"})
@@ -452,6 +434,7 @@ var _ = Describe("Podman create", func() {
 	})
 
 	It("podman create --cpus 5 sets nanocpus", func() {
+		SkipIfRootlessCgroupsV1("Not supported for rootless + CgroupsV1")
 		numCpus := 5
 		nanoCPUs := numCpus * 1000000000
 		ctrName := "testCtr"
@@ -560,7 +543,7 @@ var _ = Describe("Podman create", func() {
 		session = podmanTest.Podman([]string{"create", "--umask", "9999", "--name", "bad", ALPINE})
 		session.WaitWithDefaultTimeout()
 		Expect(session).To(ExitWithError())
-		Expect(session.ErrorToString()).To(ContainSubstring("Invalid umask"))
+		Expect(session.ErrorToString()).To(ContainSubstring("invalid umask"))
 	})
 
 	It("create container in pod with IP should fail", func() {
@@ -593,7 +576,7 @@ var _ = Describe("Podman create", func() {
 		pod.WaitWithDefaultTimeout()
 		Expect(pod).Should(Exit(0))
 
-		netName := "pod" + stringid.GenerateNonCryptoID()
+		netName := "pod" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))

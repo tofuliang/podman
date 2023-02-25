@@ -2,7 +2,6 @@ package integration
 
 import (
 	"os"
-	"strings"
 
 	. "github.com/containers/podman/v4/test/utils"
 	"github.com/containers/storage/pkg/stringid"
@@ -42,7 +41,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("bad container name in network disconnect should result in error", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -54,7 +53,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("network disconnect with net mode slirp4netns should result in error", func() {
-		netName := "slirp" + stringid.GenerateNonCryptoID()
+		netName := "slirp" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -72,7 +71,8 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("podman network disconnect", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+		SkipIfRootlessCgroupsV1("stats not supported under rootless CgroupsV1")
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -94,7 +94,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		exec2 := podmanTest.Podman([]string{"exec", "-it", "test", "cat", "/etc/resolv.conf"})
 		exec2.WaitWithDefaultTimeout()
 		Expect(exec2).Should(Exit(0))
-		Expect(strings.Contains(exec2.OutputToString(), ns)).To(BeTrue())
+		Expect(exec2.OutputToString()).To(ContainSubstring(ns))
 
 		dis := podmanTest.Podman([]string{"network", "disconnect", netName, "test"})
 		dis.WaitWithDefaultTimeout()
@@ -113,7 +113,12 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		exec3 := podmanTest.Podman([]string{"exec", "-it", "test", "cat", "/etc/resolv.conf"})
 		exec3.WaitWithDefaultTimeout()
 		Expect(exec3).Should(Exit(0))
-		Expect(strings.Contains(exec3.OutputToString(), ns)).To(BeFalse())
+		Expect(exec3.OutputToString()).ToNot(ContainSubstring(ns))
+
+		// make sure stats still works https://github.com/containers/podman/issues/13824
+		stats := podmanTest.Podman([]string{"stats", "test", "--no-stream"})
+		stats.WaitWithDefaultTimeout()
+		Expect(stats).Should(Exit(0))
 	})
 
 	It("bad network name in connect should result in error", func() {
@@ -123,7 +128,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("bad container name in network connect should result in error", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -135,7 +140,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("network connect with net mode slirp4netns should result in error", func() {
-		netName := "slirp" + stringid.GenerateNonCryptoID()
+		netName := "slirp" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -152,8 +157,8 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		Expect(con.ErrorToString()).To(ContainSubstring(`"slirp4netns" is not supported: invalid network mode`))
 	})
 
-	It("podman connect on a container that already is connected to the network should error", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+	It("podman connect on a container that already is connected to the network should error after init", func() {
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -172,11 +177,20 @@ var _ = Describe("Podman network connect and disconnect", func() {
 
 		con := podmanTest.Podman([]string{"network", "connect", netName, "test"})
 		con.WaitWithDefaultTimeout()
-		Expect(con).Should(ExitWithError())
+		Expect(con).Should(Exit(0))
+
+		init := podmanTest.Podman([]string{"init", "test"})
+		init.WaitWithDefaultTimeout()
+		Expect(init).Should(Exit(0))
+
+		con2 := podmanTest.Podman([]string{"network", "connect", netName, "test"})
+		con2.WaitWithDefaultTimeout()
+		Expect(con2).Should(ExitWithError())
 	})
 
 	It("podman network connect", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+		SkipIfRootlessCgroupsV1("stats not supported under rootless CgroupsV1")
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -192,7 +206,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		Expect(exec).Should(Exit(0))
 
 		// Create a second network
-		newNetName := "aliasTest" + stringid.GenerateNonCryptoID()
+		newNetName := "aliasTest" + stringid.GenerateRandomID()
 		session = podmanTest.Podman([]string{"network", "create", newNetName, "--subnet", "10.11.100.0/24"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -206,7 +220,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		exec2 := podmanTest.Podman([]string{"exec", "-it", "test", "cat", "/etc/resolv.conf"})
 		exec2.WaitWithDefaultTimeout()
 		Expect(exec2).Should(Exit(0))
-		Expect(strings.Contains(exec2.OutputToString(), ns)).To(BeFalse())
+		Expect(exec2.OutputToString()).ToNot(ContainSubstring(ns))
 
 		ip := "10.11.100.99"
 		mac := "44:11:44:11:44:11"
@@ -235,7 +249,12 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		exec3 := podmanTest.Podman([]string{"exec", "-it", "test", "cat", "/etc/resolv.conf"})
 		exec3.WaitWithDefaultTimeout()
 		Expect(exec3).Should(Exit(0))
-		Expect(strings.Contains(exec3.OutputToString(), ns)).To(BeTrue())
+		Expect(exec3.OutputToString()).To(ContainSubstring(ns))
+
+		// make sure stats works https://github.com/containers/podman/issues/13824
+		stats := podmanTest.Podman([]string{"stats", "test", "--no-stream"})
+		stats.WaitWithDefaultTimeout()
+		Expect(stats).Should(Exit(0))
 
 		// make sure no logrus errors are shown https://github.com/containers/podman/issues/9602
 		rm := podmanTest.Podman([]string{"rm", "--time=0", "-f", "test"})
@@ -245,13 +264,13 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("podman network connect when not running", func() {
-		netName1 := "connect1" + stringid.GenerateNonCryptoID()
+		netName1 := "connect1" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName1})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		defer podmanTest.removeNetwork(netName1)
 
-		netName2 := "connect2" + stringid.GenerateNonCryptoID()
+		netName2 := "connect2" + stringid.GenerateRandomID()
 		session = podmanTest.Podman([]string{"network", "create", netName2})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -284,7 +303,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("podman network connect and run with network ID", func() {
-		netName := "ID" + stringid.GenerateNonCryptoID()
+		netName := "ID" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -304,7 +323,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 		Expect(exec).Should(Exit(0))
 
 		// Create a second network
-		newNetName := "ID2" + stringid.GenerateNonCryptoID()
+		newNetName := "ID2" + stringid.GenerateRandomID()
 		session = podmanTest.Podman([]string{"network", "create", newNetName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -331,13 +350,13 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("podman network disconnect when not running", func() {
-		netName1 := "aliasTest" + stringid.GenerateNonCryptoID()
+		netName1 := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName1})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		defer podmanTest.removeNetwork(netName1)
 
-		netName2 := "aliasTest" + stringid.GenerateNonCryptoID()
+		netName2 := "aliasTest" + stringid.GenerateRandomID()
 		session2 := podmanTest.Podman([]string{"network", "create", netName2})
 		session2.WaitWithDefaultTimeout()
 		Expect(session2).Should(Exit(0))
@@ -376,7 +395,7 @@ var _ = Describe("Podman network connect and disconnect", func() {
 	})
 
 	It("podman network disconnect and run with network ID", func() {
-		netName := "aliasTest" + stringid.GenerateNonCryptoID()
+		netName := "aliasTest" + stringid.GenerateRandomID()
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))

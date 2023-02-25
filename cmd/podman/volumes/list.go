@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -55,10 +55,10 @@ func init() {
 	_ = lsCommand.RegisterFlagCompletionFunc(filterFlagName, common.AutocompleteVolumeFilters)
 
 	formatFlagName := "format"
-	flags.StringVar(&cliOpts.Format, formatFlagName, "{{.Driver}}\t{{.Name}}\n", "Format volume output using Go template")
+	flags.StringVar(&cliOpts.Format, formatFlagName, "{{range .}}{{.Driver}}\t{{.Name}}\n{{end -}}", "Format volume output using Go template")
 	_ = lsCommand.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(&entities.VolumeListReport{}))
 
-	flags.Bool("noheading", false, "Do not print headers")
+	flags.BoolP("noheading", "n", false, "Do not print headers")
 	flags.BoolVarP(&cliOpts.Quiet, "quiet", "q", false, "Print volume output in quiet mode")
 }
 
@@ -95,34 +95,28 @@ func outputTemplate(cmd *cobra.Command, responses []*entities.VolumeListReport) 
 		"Name": "VOLUME NAME",
 	})
 
-	var row string
+	rpt := report.New(os.Stdout, cmd.Name())
+	defer rpt.Flush()
+
+	var err error
 	switch {
+	case cmd.Flag("format").Changed:
+		rpt, err = rpt.Parse(report.OriginUser, cliOpts.Format)
 	case cliOpts.Quiet:
-		row = "{{.Name}}\n"
-	case cmd.Flags().Changed("format"):
-		row = report.NormalizeFormat(cliOpts.Format)
+		rpt, err = rpt.Parse(report.OriginUser, "{{.Name}}\n")
 	default:
-		row = cmd.Flag("format").Value.String()
+		rpt, err = rpt.Parse(report.OriginPodman, cliOpts.Format)
 	}
-	format := report.EnforceRange(row)
-
-	tmpl, err := report.NewTemplate("list").Parse(format)
 	if err != nil {
 		return err
 	}
 
-	w, err := report.NewWriterDefault(os.Stdout)
-	if err != nil {
-		return err
-	}
-	defer w.Flush()
-
-	if !(noHeading || cliOpts.Quiet || cmd.Flag("format").Changed) {
-		if err := tmpl.Execute(w, headers); err != nil {
-			return errors.Wrapf(err, "failed to write report column headers")
+	if (rpt.RenderHeaders) && !noHeading {
+		if err := rpt.Execute(headers); err != nil {
+			return fmt.Errorf("failed to write report column headers: %w", err)
 		}
 	}
-	return tmpl.Execute(w, responses)
+	return rpt.Execute(responses)
 }
 
 func outputJSON(vols []*entities.VolumeListReport) error {

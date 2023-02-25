@@ -1,4 +1,4 @@
-//nolint:deadcode,unused // these types are used to wire generated swagger to API code
+//nolint:unused // these types are used to wire generated swagger to API code
 package swagger
 
 import (
@@ -39,6 +39,13 @@ type imageInspect struct {
 type imagesLoadResponseLibpod struct {
 	// in:body
 	Body entities.ImageLoadReport
+}
+
+// Image Scp
+// swagger:response
+type imagesScpResponseLibpod struct {
+	// in:body
+	Body reports.ScpReport
 }
 
 // Image Import
@@ -233,7 +240,7 @@ type containersList struct {
 // swagger:response
 type volumeInspect struct {
 	// in:body
-	Body dockerAPI.Volume
+	Body dockerVolume.Volume
 }
 
 // Volume prune
@@ -247,7 +254,7 @@ type volumePruneResponse struct {
 // swagger:response
 type volumeList struct {
 	// in:body
-	Body dockerVolume.VolumeListOKBody
+	Body dockerVolume.ListResponse
 }
 
 // Volume list
@@ -304,6 +311,11 @@ type volumePruneLibpod struct {
 type containerCreateResponse struct {
 	// in:body
 	Body entities.ContainerCreateResponse
+}
+
+type containerUpdateResponse struct {
+	// in:body
+	ID string
 }
 
 // Wait container

@@ -25,7 +25,7 @@ showrun() {
 case $1 in
     audit)
         case $OS_RELEASE_ID in
-            ubuntu) showrun cat /var/log/kern.log ;;
+            debian) showrun cat /var/log/kern.log ;;
             fedora) showrun cat /var/log/audit/audit.log ;;
             *) bad_os_id_ver ;;
         esac
@@ -33,12 +33,8 @@ case $1 in
     df) showrun df -lhTx tmpfs ;;
     journal) showrun journalctl -b ;;
     podman) showrun ./bin/podman system info ;;
-    server)
-      msg "(Trailing 100 lines of $PODMAN_SERVER_LOG)"
-      if [[ -r "$PODMAN_SERVER_LOG" ]]; then tail -100 $PODMAN_SERVER_LOG; fi
-       ;;
     packages)
-        # These names are common to Fedora and Ubuntu
+        # These names are common to Fedora and Debian
         PKG_NAMES=(\
                     conmon
                     containernetworking-plugins
@@ -56,13 +52,14 @@ case $1 in
                 cat /etc/fedora-release
                 PKG_LST_CMD='rpm -q --qf=%{N}-%{V}-%{R}-%{ARCH}\n'
                 PKG_NAMES+=(\
-                    aardvark
+                    aardvark-dns
                     container-selinux
                     libseccomp
                     netavark
+                    passt
                 )
                 ;;
-            ubuntu)
+            debian)
                 cat /etc/issue
                 PKG_LST_CMD='dpkg-query --show --showformat=${Package}-${Version}-${Architecture}\n'
                 PKG_NAMES+=(\

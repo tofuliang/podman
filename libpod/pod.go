@@ -1,6 +1,7 @@
 package libpod
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/libpod/lock"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
 )
 
 // Pod represents a group of containers that are managed together.
@@ -83,6 +83,9 @@ type PodConfig struct {
 
 	// ID of the pod's lock
 	LockID uint32 `json:"lockID"`
+
+	// ResourceLimits hold the pod level resource limits
+	ResourceLimits specs.LinuxResources
 }
 
 // podState represents a pod's state
@@ -116,18 +119,7 @@ func (p *Pod) ResourceLim() *specs.LinuxResources {
 	empty := &specs.LinuxResources{
 		CPU: &specs.LinuxCPU{},
 	}
-	infra, err := p.runtime.GetContainer(p.state.InfraContainerID)
-	if err != nil {
-		return empty
-	}
-	conf := infra.config.Spec
-	if err != nil {
-		return empty
-	}
-	if conf.Linux == nil || conf.Linux.Resources == nil {
-		return empty
-	}
-	if err = JSONDeepCopy(conf.Linux.Resources, resCopy); err != nil {
+	if err := JSONDeepCopy(p.config.ResourceLimits, resCopy); err != nil {
 		return nil
 	}
 	if resCopy.CPU != nil {
@@ -139,34 +131,91 @@ func (p *Pod) ResourceLim() *specs.LinuxResources {
 
 // CPUPeriod returns the pod CPU period
 func (p *Pod) CPUPeriod() uint64 {
-	if p.state.InfraContainerID == "" {
+	resLim := p.ResourceLim()
+	if resLim.CPU == nil || resLim.CPU.Period == nil {
 		return 0
 	}
-	infra, err := p.runtime.GetContainer(p.state.InfraContainerID)
-	if err != nil {
-		return 0
-	}
-	conf := infra.config.Spec
-	if conf != nil && conf.Linux != nil && conf.Linux.Resources != nil && conf.Linux.Resources.CPU != nil && conf.Linux.Resources.CPU.Period != nil {
-		return *conf.Linux.Resources.CPU.Period
-	}
-	return 0
+	return *resLim.CPU.Period
 }
 
 // CPUQuota returns the pod CPU quota
 func (p *Pod) CPUQuota() int64 {
-	if p.state.InfraContainerID == "" {
+	resLim := p.ResourceLim()
+	if resLim.CPU == nil || resLim.CPU.Quota == nil {
 		return 0
 	}
-	infra, err := p.runtime.GetContainer(p.state.InfraContainerID)
+	return *resLim.CPU.Quota
+}
+
+// MemoryLimit returns the pod Memory Limit
+func (p *Pod) MemoryLimit() uint64 {
+	resLim := p.ResourceLim()
+	if resLim.Memory == nil || resLim.Memory.Limit == nil {
+		return 0
+	}
+	return uint64(*resLim.Memory.Limit)
+}
+
+// MemorySwap returns the pod Memory swap limit
+func (p *Pod) MemorySwap() uint64 {
+	resLim := p.ResourceLim()
+	if resLim.Memory == nil || resLim.Memory.Swap == nil {
+		return 0
+	}
+	return uint64(*resLim.Memory.Swap)
+}
+
+// BlkioWeight returns the pod blkio weight
+func (p *Pod) BlkioWeight() uint64 {
+	resLim := p.ResourceLim()
+	if resLim.BlockIO == nil || resLim.BlockIO.Weight == nil {
+		return 0
+	}
+	return uint64(*resLim.BlockIO.Weight)
+}
+
+// CPUSetMems returns the pod CPUSet memory nodes
+func (p *Pod) CPUSetMems() string {
+	resLim := p.ResourceLim()
+	if resLim.CPU == nil {
+		return ""
+	}
+	return resLim.CPU.Mems
+}
+
+// CPUShares returns the pod cpu shares
+func (p *Pod) CPUShares() uint64 {
+	resLim := p.ResourceLim()
+	if resLim.CPU == nil || resLim.CPU.Shares == nil {
+		return 0
+	}
+	return *resLim.CPU.Shares
+}
+
+// BlkiThrottleReadBps returns the pod  throttle devices
+func (p *Pod) BlkiThrottleReadBps() []define.InspectBlkioThrottleDevice {
+	resLim := p.ResourceLim()
+	if resLim.BlockIO == nil || resLim.BlockIO.ThrottleReadBpsDevice == nil {
+		return []define.InspectBlkioThrottleDevice{}
+	}
+	devs, err := blkioDeviceThrottle(nil, resLim.BlockIO.ThrottleReadBpsDevice)
 	if err != nil {
-		return 0
+		return []define.InspectBlkioThrottleDevice{}
 	}
-	conf := infra.config.Spec
-	if conf != nil && conf.Linux != nil && conf.Linux.Resources != nil && conf.Linux.Resources.CPU != nil && conf.Linux.Resources.CPU.Quota != nil {
-		return *conf.Linux.Resources.CPU.Quota
+	return devs
+}
+
+// BlkiThrottleWriteBps returns the pod  throttle devices
+func (p *Pod) BlkiThrottleWriteBps() []define.InspectBlkioThrottleDevice {
+	resLim := p.ResourceLim()
+	if resLim.BlockIO == nil || resLim.BlockIO.ThrottleWriteBpsDevice == nil {
+		return []define.InspectBlkioThrottleDevice{}
 	}
-	return 0
+	devs, err := blkioDeviceThrottle(nil, resLim.BlockIO.ThrottleWriteBpsDevice)
+	if err != nil {
+		return []define.InspectBlkioThrottleDevice{}
+	}
+	return devs
 }
 
 // NetworkMode returns the Network mode given by the user ex: pod, private...
@@ -178,8 +227,8 @@ func (p *Pod) NetworkMode() string {
 	return infra.NetworkMode()
 }
 
-// PidMode returns the PID mode given by the user ex: pod, private...
-func (p *Pod) PidMode() string {
+// Namespace Mode returns the given NS mode provided by the user ex: host, private...
+func (p *Pod) NamespaceMode(kind specs.LinuxNamespaceType) string {
 	infra, err := p.runtime.GetContainer(p.state.InfraContainerID)
 	if err != nil {
 		return ""
@@ -187,28 +236,7 @@ func (p *Pod) PidMode() string {
 	ctrSpec := infra.config.Spec
 	if ctrSpec != nil && ctrSpec.Linux != nil {
 		for _, ns := range ctrSpec.Linux.Namespaces {
-			if ns.Type == specs.PIDNamespace {
-				if ns.Path != "" {
-					return fmt.Sprintf("ns:%s", ns.Path)
-				}
-				return "private"
-			}
-		}
-		return "host"
-	}
-	return ""
-}
-
-// PidMode returns the PID mode given by the user ex: pod, private...
-func (p *Pod) UserNSMode() string {
-	infra, err := p.infraContainer()
-	if err != nil {
-		return ""
-	}
-	ctrSpec := infra.config.Spec
-	if ctrSpec != nil && ctrSpec.Linux != nil {
-		for _, ns := range ctrSpec.Linux.Namespaces {
-			if ns.Type == specs.UserNamespace {
+			if ns.Type == kind {
 				if ns.Path != "" {
 					return fmt.Sprintf("ns:%s", ns.Path)
 				}
@@ -316,7 +344,7 @@ func (p *Pod) CgroupPath() (string, error) {
 		return "", err
 	}
 	if p.state.InfraContainerID == "" {
-		return "", errors.Wrap(define.ErrNoSuchCtr, "pod has no infra container")
+		return "", fmt.Errorf("pod has no infra container: %w", define.ErrNoSuchCtr)
 	}
 	return p.state.CgroupPath, nil
 }
@@ -390,7 +418,7 @@ func (p *Pod) infraContainer() (*Container, error) {
 		return nil, err
 	}
 	if id == "" {
-		return nil, errors.Wrap(define.ErrNoSuchCtr, "pod has no infra container")
+		return nil, fmt.Errorf("pod has no infra container: %w", define.ErrNoSuchCtr)
 	}
 
 	return p.runtime.state.Container(id)
@@ -430,7 +458,7 @@ func (p *Pod) GetPodStats(previousContainerStats map[string]*define.ContainerSta
 		newStats, err := c.GetContainerStats(previousContainerStats[c.ID()])
 		// If the container wasn't running, don't include it
 		// but also suppress the error
-		if err != nil && errors.Cause(err) != define.ErrCtrStateInvalid {
+		if err != nil && !errors.Is(err, define.ErrCtrStateInvalid) {
 			return nil, err
 		}
 		if err == nil {
@@ -470,4 +498,15 @@ func (p *Pod) initContainers() ([]*Container, error) {
 		}
 	}
 	return initCons, nil
+}
+
+func (p *Pod) Config() (*PodConfig, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	conf := &PodConfig{}
+
+	err := JSONDeepCopy(p.config, conf)
+
+	return conf, err
 }

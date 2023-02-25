@@ -2,12 +2,12 @@ package containers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/config"
 	cutil "github.com/containers/common/pkg/util"
 	"github.com/containers/image/v5/transports/alltransports"
@@ -20,10 +20,9 @@ import (
 	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/containers/podman/v4/pkg/specgenutil"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/mattn/go-isatty"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -69,9 +68,11 @@ func createFlags(cmd *cobra.Command) {
 		initContainerFlagName, "",
 		"Make this a pod init container.",
 	)
+	_ = cmd.RegisterFlagCompletionFunc(initContainerFlagName, common.AutocompleteInitCtr)
 
 	flags.SetInterspersed(false)
-	common.DefineCreateFlags(cmd, &cliVals, false, false)
+	common.DefineCreateDefaults(&cliVals)
+	common.DefineCreateFlags(cmd, &cliVals, entities.CreateMode)
 	common.DefineNetFlags(cmd)
 
 	flags.SetNormalizeFunc(utils.AliasFlags)
@@ -85,8 +86,6 @@ func createFlags(cmd *cobra.Command) {
 
 		_ = flags.MarkHidden("pidfile")
 	}
-
-	_ = cmd.RegisterFlagCompletionFunc(initContainerFlagName, completion.AutocompleteDefault)
 }
 
 func init() {
@@ -102,13 +101,29 @@ func init() {
 	createFlags(containerCreateCommand)
 }
 
-func create(cmd *cobra.Command, args []string) error {
-	var (
-		err error
-	)
-	flags := cmd.Flags()
-	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags)
+func commonFlags(cmd *cobra.Command) error {
+	var err error
+
+	report, err := registry.ContainerEngine().NetworkExists(registry.Context(), "pasta")
 	if err != nil {
+		return err
+	}
+	pastaNetworkNameExists := report.Value
+
+	flags := cmd.Flags()
+	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags, pastaNetworkNameExists)
+	if err != nil {
+		return err
+	}
+
+	if cmd.Flags().Changed("image-volume") {
+		cliVals.ImageVolume = cmd.Flag("image-volume").Value.String()
+	}
+	return nil
+}
+
+func create(cmd *cobra.Command, args []string) error {
+	if err := commonFlags(cmd); err != nil {
 		return err
 	}
 
@@ -118,12 +133,12 @@ func create(cmd *cobra.Command, args []string) error {
 			return errors.New("must specify pod value with init-ctr")
 		}
 		if !cutil.StringInSlice(initctr, []string{define.AlwaysInitContainer, define.OneShotInitContainer}) {
-			return errors.Errorf("init-ctr value must be '%s' or '%s'", define.AlwaysInitContainer, define.OneShotInitContainer)
+			return fmt.Errorf("init-ctr value must be '%s' or '%s'", define.AlwaysInitContainer, define.OneShotInitContainer)
 		}
 		cliVals.InitContainerType = initctr
 	}
 
-	cliVals, err = CreateInit(cmd, cliVals, false)
+	cliVals, err := CreateInit(cmd, cliVals, false)
 	if err != nil {
 		return err
 	}
@@ -131,7 +146,7 @@ func create(cmd *cobra.Command, args []string) error {
 	rawImageName := ""
 	if !cliVals.RootFS {
 		rawImageName = args[0]
-		name, err := PullImage(args[0], cliVals)
+		name, err := PullImage(args[0], &cliVals)
 		if err != nil {
 			return err
 		}
@@ -159,7 +174,7 @@ func create(cmd *cobra.Command, args []string) error {
 	}
 
 	if cliVals.CIDFile != "" {
-		if err := util.CreateCidFile(cliVals.CIDFile, report.Id); err != nil {
+		if err := util.CreateIDFile(cliVals.CIDFile, report.Id); err != nil {
 			return err
 		}
 	}
@@ -181,24 +196,39 @@ func replaceContainer(name string) error {
 	return removeContainers([]string{name}, rmOptions, false)
 }
 
-func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra bool) (entities.ContainerCreateOptions, error) {
-	vals.UserNS = c.Flag("userns").Value.String()
-	// if user did not modify --userns flag and did turn on
-	// uid/gid mappings, set userns flag to "private"
-	if !c.Flag("userns").Changed && vals.UserNS == "host" {
-		if len(vals.UIDMap) > 0 ||
-			len(vals.GIDMap) > 0 ||
-			vals.SubUIDName != "" ||
-			vals.SubGIDName != "" {
-			vals.UserNS = "private"
+func createOrUpdateFlags(cmd *cobra.Command, vals *entities.ContainerCreateOptions) error {
+	if cmd.Flags().Changed("pids-limit") {
+		val := cmd.Flag("pids-limit").Value.String()
+		// Convert -1 to 0, so that -1 maps to unlimited pids limit
+		if val == "-1" {
+			val = "0"
 		}
+		pidsLimit, err := strconv.ParseInt(val, 10, 32)
+		if err != nil {
+			return err
+		}
+		vals.PIDsLimit = &pidsLimit
+	}
+
+	return nil
+}
+
+func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra bool) (entities.ContainerCreateOptions, error) {
+	if len(vals.UIDMap) > 0 || len(vals.GIDMap) > 0 || vals.SubUIDName != "" || vals.SubGIDName != "" {
+		if c.Flag("userns").Changed {
+			return vals, errors.New("--userns and --uidmap/--gidmap/--subuidname/--subgidname are mutually exclusive")
+		}
+		// force userns flag to "private"
+		vals.UserNS = "private"
+	} else {
+		vals.UserNS = c.Flag("userns").Value.String()
 	}
 	if c.Flag("kernel-memory") != nil && c.Flag("kernel-memory").Changed {
 		logrus.Warnf("The --kernel-memory flag is no longer supported. This flag is a noop.")
 	}
 
 	if cliVals.LogDriver == define.PassthroughLogging {
-		if isatty.IsTerminal(0) || isatty.IsTerminal(1) || isatty.IsTerminal(2) {
+		if term.IsTerminal(0) || term.IsTerminal(1) || term.IsTerminal(2) {
 			return vals, errors.New("the '--log-driver passthrough' option cannot be used on a TTY")
 		}
 		if registry.IsRemote() {
@@ -207,17 +237,13 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 	}
 
 	if !isInfra {
-		if c.Flag("shm-size").Changed {
-			vals.ShmSize = c.Flag("shm-size").Value.String()
-		}
 		if c.Flag("cpu-period").Changed && c.Flag("cpus").Changed {
-			return vals, errors.Errorf("--cpu-period and --cpus cannot be set together")
+			return vals, errors.New("--cpu-period and --cpus cannot be set together")
 		}
 		if c.Flag("cpu-quota").Changed && c.Flag("cpus").Changed {
-			return vals, errors.Errorf("--cpu-quota and --cpus cannot be set together")
+			return vals, errors.New("--cpu-quota and --cpus cannot be set together")
 		}
 		vals.IPC = c.Flag("ipc").Value.String()
-		vals.UTS = c.Flag("uts").Value.String()
 		vals.PID = c.Flag("pid").Value.String()
 		vals.CgroupNS = c.Flag("cgroupns").Value.String()
 
@@ -246,42 +272,41 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 			}
 			vals.OOMScoreAdj = &val
 		}
-		if c.Flags().Changed("pids-limit") {
-			val := c.Flag("pids-limit").Value.String()
-			// Convert -1 to 0, so that -1 maps to unlimited pids limit
-			if val == "-1" {
-				val = "0"
-			}
-			pidsLimit, err := strconv.ParseInt(val, 10, 32)
-			if err != nil {
-				return vals, err
-			}
-			vals.PIDsLimit = &pidsLimit
+
+		if err := createOrUpdateFlags(c, &vals); err != nil {
+			return vals, err
 		}
+
 		if c.Flags().Changed("env") {
 			env, err := c.Flags().GetStringArray("env")
 			if err != nil {
-				return vals, errors.Wrapf(err, "retrieve env flag")
+				return vals, fmt.Errorf("retrieve env flag: %w", err)
 			}
 			vals.Env = env
 		}
 		if c.Flag("cgroups").Changed && vals.CgroupsMode == "split" && registry.IsRemote() {
-			return vals, errors.Errorf("the option --cgroups=%q is not supported in remote mode", vals.CgroupsMode)
+			return vals, fmt.Errorf("the option --cgroups=%q is not supported in remote mode", vals.CgroupsMode)
 		}
 
 		if c.Flag("pod").Changed && !strings.HasPrefix(c.Flag("pod").Value.String(), "new:") && c.Flag("userns").Changed {
-			return vals, errors.Errorf("--userns and --pod cannot be set together")
+			return vals, errors.New("--userns and --pod cannot be set together")
 		}
 	}
-	if (c.Flag("dns").Changed || c.Flag("dns-opt").Changed || c.Flag("dns-search").Changed) && vals.Net != nil && (vals.Net.Network.NSMode == specgen.NoNetwork || vals.Net.Network.IsContainer()) {
-		return vals, errors.Errorf("conflicting options: dns and the network mode: " + string(vals.Net.Network.NSMode))
+	if c.Flag("shm-size").Changed {
+		vals.ShmSize = c.Flag("shm-size").Value.String()
+	}
+	if c.Flag("shm-size-systemd").Changed {
+		vals.ShmSizeSystemd = c.Flag("shm-size-systemd").Value.String()
+	}
+	if (c.Flag("dns").Changed || c.Flag("dns-option").Changed || c.Flag("dns-search").Changed) && vals.Net != nil && (vals.Net.Network.NSMode == specgen.NoNetwork || vals.Net.Network.IsContainer()) {
+		return vals, fmt.Errorf("conflicting options: dns and the network mode: " + string(vals.Net.Network.NSMode))
 	}
 	noHosts, err := c.Flags().GetBool("no-hosts")
 	if err != nil {
 		return vals, err
 	}
 	if noHosts && c.Flag("add-host").Changed {
-		return vals, errors.Errorf("--no-hosts and --add-host cannot be set together")
+		return vals, errors.New("--no-hosts and --add-host cannot be set together")
 	}
 
 	if !isInfra && c.Flag("entrypoint").Changed {
@@ -295,7 +320,8 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 	return vals, nil
 }
 
-func PullImage(imageName string, cliVals entities.ContainerCreateOptions) (string, error) {
+// Pulls image if any also parses and populates OS, Arch and Variant in specified container create options
+func PullImage(imageName string, cliVals *entities.ContainerCreateOptions) (string, error) {
 	pullPolicy, err := config.ParsePullPolicy(cliVals.Pull)
 	if err != nil {
 		return "", err
@@ -304,7 +330,7 @@ func PullImage(imageName string, cliVals entities.ContainerCreateOptions) (strin
 	if cliVals.Platform != "" || cliVals.Arch != "" || cliVals.OS != "" {
 		if cliVals.Platform != "" {
 			if cliVals.Arch != "" || cliVals.OS != "" {
-				return "", errors.Errorf("--platform option can not be specified with --arch or --os")
+				return "", errors.New("--platform option can not be specified with --arch or --os")
 			}
 			split := strings.SplitN(cliVals.Platform, "/", 2)
 			cliVals.OS = split[0]
@@ -319,15 +345,21 @@ func PullImage(imageName string, cliVals entities.ContainerCreateOptions) (strin
 		skipTLSVerify = types.NewOptionalBool(!cliVals.TLSVerify.Value())
 	}
 
+	decConfig, err := util.DecryptConfig(cliVals.DecryptionKeys)
+	if err != nil {
+		return "unable to obtain decryption config", err
+	}
+
 	pullReport, pullErr := registry.ImageEngine().Pull(registry.GetContext(), imageName, entities.ImagePullOptions{
-		Authfile:        cliVals.Authfile,
-		Quiet:           cliVals.Quiet,
-		Arch:            cliVals.Arch,
-		OS:              cliVals.OS,
-		Variant:         cliVals.Variant,
-		SignaturePolicy: cliVals.SignaturePolicy,
-		PullPolicy:      pullPolicy,
-		SkipTLSVerify:   skipTLSVerify,
+		Authfile:         cliVals.Authfile,
+		Quiet:            cliVals.Quiet,
+		Arch:             cliVals.Arch,
+		OS:               cliVals.OS,
+		Variant:          cliVals.Variant,
+		SignaturePolicy:  cliVals.SignaturePolicy,
+		PullPolicy:       pullPolicy,
+		SkipTLSVerify:    skipTLSVerify,
+		OciDecryptConfig: decConfig,
 	})
 	if pullErr != nil {
 		return "", pullErr
@@ -352,7 +384,7 @@ func createPodIfNecessary(cmd *cobra.Command, s *specgen.SpecGenerator, netOpts 
 	}
 	podName := strings.Replace(s.Pod, "new:", "", 1)
 	if len(podName) < 1 {
-		return errors.Errorf("new pod name must be at least one character")
+		return errors.New("new pod name must be at least one character")
 	}
 
 	var err error
@@ -390,6 +422,8 @@ func createPodIfNecessary(cmd *cobra.Command, s *specgen.SpecGenerator, netOpts 
 	infraOpts := entities.NewInfraContainerCreateOptions()
 	infraOpts.Net = netOpts
 	infraOpts.Quiet = true
+	infraOpts.ReadOnly = true
+	infraOpts.ReadWriteTmpFS = false
 	infraOpts.Hostname, err = cmd.Flags().GetString("hostname")
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-% podman(1)
+% podman 1
 
 ## NAME
 podman - Simple management tool for pods, containers and images
@@ -43,8 +43,8 @@ Remote connections use local containers.conf for default.
 #### **--events-backend**=*type*
 
 Backend to use for storing events. Allowed values are **file**, **journald**, and
-**none**. When *file* is specified, the events are stored under a subdirectory
-of the *tmpdir* location (see **--tmpdir** below).
+**none**. When *file* is specified, the events are stored under
+`<tmpdir>/events/events.log` (see **--tmpdir** below).
 
 #### **--help**, **-h**
 
@@ -64,7 +64,7 @@ If `--hooks-dir` is unset for root callers, Podman and libpod will currently def
 
 Podman and libpod currently support an additional `precreate` state which is called before the runtime's `create` operation.  Unlike the other stages, which receive the container state on their standard input, `precreate` hooks receive the proposed runtime configuration on their standard input.  They may alter that configuration as they see fit, and write the altered form to their standard output.
 
-**WARNING**: the `precreate` hook lets you do powerful things, such as adding additional mounts to the runtime configuration.  That power also makes it easy to break things.  Before reporting libpod errors, try running your container with `precreate` hooks disabled to see if the problem is due to one of your hooks.
+**WARNING**: the `precreate` hook allows powerful changes to occur, such as adding additional mounts to the runtime configuration.  That power also makes it easy to break things.  Before reporting libpod errors, try running a container with `precreate` hooks disabled to see if the problem is due to one of the hooks.
 
 #### **--identity**=*path*
 
@@ -82,21 +82,16 @@ Remote connections use local containers.conf for default.
 
 Log messages at and above specified level: debug, info, warn, error, fatal or panic (default: "warn")
 
-#### **--namespace**=*namespace*
-
-Set libpod namespace. Namespaces are used to separate groups of containers and pods in libpod's state.
-When namespace is set, created containers and pods will join the given namespace, and only containers and pods in the given namespace will be visible to Podman.
-
 #### **--network-cmd-path**=*path*
-Path to the command binary to use for setting up a network.  It is currently only used for setting up a slirp4netns network.  If "" is used then the binary is looked up using the $PATH environment variable.
+Path to the command binary to use for setting up a network.  It is currently only used for setting up a slirp4netns(1) or pasta(1) network.  If "" is used then the binary is looked up using the $PATH environment variable.
 
 #### **--network-config-dir**=*directory*
 
 Path to the directory where network configuration files are located.
-For the CNI backend the default is "/etc/cni/net.d" as root
-and "$HOME/.config/cni/net.d" as rootless.
 For the netavark backend "/etc/containers/networks" is used as root
 and "$graphroot/networks" as rootless.
+For the CNI backend the default is "/etc/cni/net.d" as root
+and "$HOME/.config/cni/net.d" as rootless. CNI will be deprecated from Podman in the future for netavark.
 
 #### **--noout**
 
@@ -110,14 +105,14 @@ environment variable is set, the **--remote** option defaults to true.
 #### **--root**=*value*
 
 Storage root dir in which data, including images, is stored (default: "/var/lib/containers/storage" for UID 0, "$HOME/.local/share/containers/storage" for other users).
-Default root dir configured in `/etc/containers/storage.conf`.
+Default root dir configured in `containers-storage.conf(5)`.
 
-Overriding this option will cause the *storage-opt* settings in /etc/containers/storage.conf to be ignored.  The user must specify additional options via the `--storage-opt` flag.
+Overriding this option will cause the *storage-opt* settings in `containers-storage.conf(5)` to be ignored.  The user must specify additional options via the `--storage-opt` flag.
 
 #### **--runroot**=*value*
 
 Storage state directory where all state information is stored (default: "/run/containers/storage" for UID 0, "/run/user/$UID/run" for other users).
-Default state dir configured in `/etc/containers/storage.conf`.
+Default state dir configured in `containers-storage.conf(5)`.
 
 #### **--runtime**=*value*
 
@@ -133,16 +128,22 @@ for cgroup V2, the default runtime is `crun`, the manpage to consult is `crun(8)
 Note: Do not pass the leading `--` to the flag. To pass the runc flag `--log-format json`
 to podman build, the option given would be `--runtime-flag log-format=json`.
 
+
+#### **--ssh**=*value*
+
+This option allows the user to change the ssh mode, meaning that rather than using the default **golang** mode, one can instead use **--ssh=native**
+to use the installed ssh binary and config file declared in containers.conf.
+
 #### **--storage-driver**=*value*
 
-Storage driver.  The default storage driver for UID 0 is configured in /etc/containers/storage.conf (`$HOME/.config/containers/storage.conf` in rootless mode), and is *vfs* for non-root users when *fuse-overlayfs* is not available.  The `STORAGE_DRIVER` environment variable overrides the default.  The --storage-driver specified driver overrides all.
+Storage driver.  The default storage driver for UID 0 is configured in `containers-storage.conf(5)` in rootless mode), and is *vfs* for non-root users when *fuse-overlayfs* is not available.  The `STORAGE_DRIVER` environment variable overrides the default.  The --storage-driver specified driver overrides all.
 
-Overriding this option will cause the *storage-opt* settings in /etc/containers/storage.conf to be ignored.  The user must
+Overriding this option will cause the *storage-opt* settings in `containers-storage.conf(5)` to be ignored.  The user must
 specify additional options via the `--storage-opt` flag.
 
 #### **--storage-opt**=*value*
 
-Storage driver option, Default storage driver options are configured in /etc/containers/storage.conf (`$HOME/.config/containers/storage.conf` in rootless mode). The `STORAGE_OPTS` environment variable overrides the default. The --storage-opt specified options overrides all. If you specify --storage-opt="", no storage options will be used.
+Specify a storage driver option. Default storage driver options are configured in `containers-storage.conf(5)`. The `STORAGE_OPTS` environment variable overrides the default. The --storage-opt specified options override all. Specify --storage-opt="" so no storage options will be used.
 
 #### **--syslog**
 
@@ -150,11 +151,19 @@ Output logging information to syslog as well as the console (default *false*).
 
 On remote clients, including Mac and Windows (excluding WSL2) machines, logging is directed to the file $HOME/.config/containers/podman.log.
 
-#### **--tmpdir**
+#### **--tmpdir**=*path*
 
-Path to the tmp directory, for libpod runtime content.
+Path to the tmp directory, for libpod runtime content. Defaults to `$XDG_RUNTIME_DIR/libpod/tmp` as rootless and `/run/libpod/tmp` as rootful.
 
 NOTE --tmpdir is not used for the temporary storage of downloaded images.  Use the environment variable `TMPDIR` to change the temporary storage location of downloaded container images. Podman defaults to use `/var/tmp`.
+
+#### **--transient-store**
+
+Enables a global transient storage mode where all container metadata is stored on non-persistent media (i.e. in the location specified by `--runroot`).
+This mode allows starting containers faster, as well as guaranteeing a fresh state on boot in case of unclean shutdowns or other problems. However
+it is not compatible with a traditional model where containers persist across reboots.
+
+Default value for this is configured in `containers-storage.conf(5)`.
 
 #### **--url**=*value*
 URL to access Podman service (default from `containers.conf`, rootless `unix://run/user/$UID/podman/podman.sock` or as root `unix://run/podman/podman.sock`).
@@ -325,7 +334,7 @@ the exit codes follow the `chroot` standard, see below:
 | [podman-mount(1)](podman-mount.1.md)             | Mount a working container's root filesystem.                                |
 | [podman-network(1)](podman-network.1.md)         | Manage Podman networks.                                                     |
 | [podman-pause(1)](podman-pause.1.md)             | Pause one or more containers.                                               |
-| [podman-play(1)](podman-play.1.md)               | Play containers, pods or volumes based on a structured input file.          |
+| [podman-kube(1)](podman-kube.1.md)               | Play containers, pods or volumes based on a structured input file.          |
 | [podman-pod(1)](podman-pod.1.md)                 | Management tool for groups of containers, called pods.                      |
 | [podman-port(1)](podman-port.1.md)               | List port mappings for a container.                                         |
 | [podman-ps(1)](podman-ps.1.md)                   | Prints out information about containers.                                    |
@@ -349,6 +358,7 @@ the exit codes follow the `chroot` standard, see below:
 | [podman-unpause(1)](podman-unpause.1.md)         | Unpause one or more containers.                                             |
 | [podman-unshare(1)](podman-unshare.1.md)         | Run a command inside of a modified user namespace.                          |
 | [podman-untag(1)](podman-untag.1.md)             | Removes one or more names from a locally-stored image.                      |
+| [podman-update(1)](podman-update.1.md)           | Updates the cgroup configuration of a given container.                      |
 | [podman-version(1)](podman-version.1.md)         | Display the Podman version information.                                     |
 | [podman-volume(1)](podman-volume.1.md)           | Simple management tool for volumes.                                         |
 | [podman-wait(1)](podman-wait.1.md)               | Wait on one or more containers to stop and print their exit codes.          |
@@ -400,8 +410,7 @@ Containers created by a non-root user are not visible to other users and are not
 
 It is required to have multiple uids/gids set for a user.  Be sure the user is present in the files `/etc/subuid` and `/etc/subgid`.
 
-If you have a recent version of usermod, you can execute the following
-commands to add the ranges to the files
+Execute the following commands to add the ranges to the files
 
 	$ sudo usermod --add-subuids 10000-75535 USERNAME
 	$ sudo usermod --add-subgids 10000-75535 USERNAME
@@ -415,9 +424,11 @@ See the `subuid(5)` and `subgid(5)` man pages for more information.
 
 Images are pulled under `XDG_DATA_HOME` when specified, otherwise in the home directory of the user under `.local/share/containers/storage`.
 
-Currently the slirp4netns package is required to be installed to create a network device, otherwise rootless containers need to run in the network namespace of the host.
+Currently slirp4netns or pasta is required to be installed to create a network
+device, otherwise rootless containers need to run in the network namespace of
+the host.
 
-In certain environments like HPC (High Performance Computing), users cannot take advantage of the additional UIDs and GIDs from the /etc/subuid and /etc/subgid systems.  However, in this environment, rootless Podman can operate with a single UID.  To make this work, set the `ignore_chown_errors` option in the /etc/containers/storage.conf or in ~/.config/containers/storage.conf files. This option tells Podman when pulling an image to ignore chown errors when attempting to change a file in a container image to match the non-root UID in the image. This means all files get saved as the user's UID. Note this could cause issues when running the container.
+In certain environments like HPC (High Performance Computing), users cannot take advantage of the additional UIDs and GIDs from the /etc/subuid and /etc/subgid systems.  However, in this environment, rootless Podman can operate with a single UID.  To make this work, set the `ignore_chown_errors` option in the `containers-storage.conf(5)` file. This option tells Podman when pulling an image to ignore chown errors when attempting to change a file in a container image to match the non-root UID in the image. This means all files get saved as the user's UID. Note this could cause issues when running the container.
 
 ### **NOTE:** Unsupported file systems in rootless mode
 
@@ -428,7 +439,7 @@ The Network File System (NFS) and other distributed file systems (for example: L
 For more information, please refer to the [Podman Troubleshooting Page](https://github.com/containers/podman/blob/main/troubleshooting.md).
 
 ## SEE ALSO
-**[containers-mounts.conf(5)](https://github.com/containers/common/blob/main/docs/containers-mounts.conf.5.md)**, **[containers.conf(5)](https://github.com/containers/common/blob/main/docs/containers.conf.5.md)**, **[containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)**, **[containers-storage.conf(5)](https://github.com/containers/storage/blob/main/docs/containers-storage.conf.5.md)**, **[buildah(1)](https://github.com/containers/buildah/blob/main/docs/buildah.1.md)**, **oci-hooks(5)**, **[containers-policy.json(5)](https://github.com/containers/image/blob/main/docs/containers-policy.json.5.md)**, **[crun(1)](https://github.com/containers/crun/blob/main/crun.1.md)**, **[runc(8)](https://github.com/opencontainers/runc/blob/master/man/runc.8.md)**, **[subuid(5)](https://www.unix.com/man-page/linux/5/subuid)**, **[subgid(5)](https://www.unix.com/man-page/linux/5/subgid)**, **[slirp4netns(1)](https://github.com/rootless-containers/slirp4netns/blob/master/slirp4netns.1.md)**, **[conmon(8)](https://github.com/containers/conmon/blob/main/docs/conmon.8.md)**
+**[containers-mounts.conf(5)](https://github.com/containers/common/blob/main/docs/containers-mounts.conf.5.md)**, **[containers.conf(5)](https://github.com/containers/common/blob/main/docs/containers.conf.5.md)**, **[containers-registries.conf(5)](https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md)**, **[containers-storage.conf(5)](https://github.com/containers/storage/blob/main/docs/containers-storage.conf.5.md)**, **[buildah(1)](https://github.com/containers/buildah/blob/main/docs/buildah.1.md)**, **oci-hooks(5)**, **[containers-policy.json(5)](https://github.com/containers/image/blob/main/docs/containers-policy.json.5.md)**, **[crun(1)](https://github.com/containers/crun/blob/main/crun.1.md)**, **[runc(8)](https://github.com/opencontainers/runc/blob/main/man/runc.8.md)**, **[subuid(5)](https://www.unix.com/man-page/linux/5/subuid)**, **[subgid(5)](https://www.unix.com/man-page/linux/5/subgid)**, **[slirp4netns(1)](https://github.com/rootless-containers/slirp4netns/blob/master/slirp4netns.1.md)**, **[pasta(1)](https://passt.top/builds/latest/web/passt.1.html)**, **[conmon(8)](https://github.com/containers/conmon/blob/main/docs/conmon.8.md)**
 
 ## HISTORY
 Dec 2016, Originally compiled by Dan Walsh <dwalsh@redhat.com>

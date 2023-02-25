@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -65,6 +65,9 @@ func rm(cmd *cobra.Command, args []string) error {
 	}
 	responses, err := registry.ContainerEngine().VolumeRm(context.Background(), args, rmOptions)
 	if err != nil {
+		if rmOptions.Force && strings.Contains(err.Error(), define.ErrNoSuchVolume.Error()) {
+			return nil
+		}
 		setExitCode(err)
 		return err
 	}
@@ -72,6 +75,9 @@ func rm(cmd *cobra.Command, args []string) error {
 		if r.Err == nil {
 			fmt.Println(r.Id)
 		} else {
+			if rmOptions.Force && strings.Contains(r.Err.Error(), define.ErrNoSuchVolume.Error()) {
+				continue
+			}
 			setExitCode(r.Err)
 			errs = append(errs, r.Err)
 		}
@@ -80,15 +86,9 @@ func rm(cmd *cobra.Command, args []string) error {
 }
 
 func setExitCode(err error) {
-	cause := errors.Cause(err)
-	switch {
-	case cause == define.ErrNoSuchVolume:
+	if errors.Is(err, define.ErrNoSuchVolume) || strings.Contains(err.Error(), define.ErrNoSuchVolume.Error()) {
 		registry.SetExitCode(1)
-	case strings.Contains(cause.Error(), define.ErrNoSuchVolume.Error()):
-		registry.SetExitCode(1)
-	case cause == define.ErrVolumeBeingUsed:
-		registry.SetExitCode(2)
-	case strings.Contains(cause.Error(), define.ErrVolumeBeingUsed.Error()):
+	} else if errors.Is(err, define.ErrVolumeBeingUsed) || strings.Contains(err.Error(), define.ErrVolumeBeingUsed.Error()) {
 		registry.SetExitCode(2)
 	}
 }

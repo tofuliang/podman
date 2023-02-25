@@ -2,8 +2,10 @@ package containers
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/podman/v4/cmd/podman/common"
@@ -13,7 +15,6 @@ import (
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	envLib "github.com/containers/podman/v4/pkg/env"
 	"github.com/containers/podman/v4/pkg/rootless"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -112,7 +113,7 @@ func exec(_ *cobra.Command, args []string) error {
 	execOpts.Cmd = args
 	if !execOpts.Latest {
 		execOpts.Cmd = args[1:]
-		nameOrID = args[0]
+		nameOrID = strings.TrimPrefix(args[0], "/")
 	}
 	// Validate given environment variables
 	execOpts.Envs = make(map[string]string)
@@ -126,14 +127,14 @@ func exec(_ *cobra.Command, args []string) error {
 
 	cliEnv, err := envLib.ParseSlice(envInput)
 	if err != nil {
-		return errors.Wrap(err, "error parsing environment variables")
+		return fmt.Errorf("parsing environment variables: %w", err)
 	}
 
 	execOpts.Envs = envLib.Join(execOpts.Envs, cliEnv)
 
 	for fd := 3; fd < int(3+execOpts.PreserveFDs); fd++ {
 		if !rootless.IsFdInherited(fd) {
-			return errors.Errorf("file descriptor %d is not available - the preserve-fds option requires that file descriptors must be passed", fd)
+			return fmt.Errorf("file descriptor %d is not available - the preserve-fds option requires that file descriptors must be passed", fd)
 		}
 	}
 

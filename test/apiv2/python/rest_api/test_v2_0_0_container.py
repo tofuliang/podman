@@ -1,10 +1,14 @@
+import io
 import multiprocessing
 import queue
 import random
+import subprocess
+import tarfile
 import threading
 import unittest
 
 import requests
+import os
 import time
 from dateutil.parser import parse
 
@@ -129,9 +133,49 @@ class ContainerTestCase(APITestCase):
             self.assertEqual(r.text, "", r.text)
 
     def test_attach(self):
-        self.skipTest("FIXME: Test timeouts")
-        r = requests.post(self.uri(self.resolve_container("/containers/{}/attach?logs=true")), timeout=5)
-        self.assertIn(r.status_code, (101, 500), r.text)
+        r = requests.post(
+            self.podman_url + "/v1.40/containers/create?name=topcontainer",
+            json={"Cmd": ["sh", "-c", "echo podman; sleep 100"], "Image": "alpine:latest"},
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        payload = r.json()
+
+        r = requests.post(
+            self.podman_url
+            + f"/v1.40/containers/{payload['Id']}/start"
+        )
+        self.assertEqual(r.status_code, 204, r.text)
+
+        # wait for the log message to appear to avoid flakes on slow systems
+        # with the /attach?logs=true test below
+        for _ in range(5):
+            r = requests.get(
+                self.podman_url
+                + f"/v1.40/containers/{payload['Id']}/logs?stdout=true"
+            )
+            self.assertIn(r.status_code, (101, 200), r.text)
+            if r.content == b"\x01\x00\x00\x00\x00\x00\x00\x07podman\n":
+                break
+
+            time.sleep(1)
+
+        r = requests.post(
+            self.podman_url
+            + f"/v1.40/containers/{payload['Id']}/attach?logs=true&stream=false"
+        )
+        self.assertIn(r.status_code, (101, 200), r.text)
+        # see the attach format docs, stdout = 1, length = 7, message = podman\n
+        self.assertEqual(r.content, b"\x01\x00\x00\x00\x00\x00\x00\x07podman\n", r.text)
+
+        r = requests.post(
+            self.podman_url
+            + f"/v1.40/containers/{payload['Id']}/stop?t=0"
+        )
+        self.assertEqual(r.status_code, 204, r.text)
+
+        requests.delete(
+            self.podman_url + f"/v1.40/containers/{payload['Id']}?force=true"
+        )
 
     def test_logs(self):
         r = requests.get(self.uri(self.resolve_container("/containers/{}/logs?stdout=true")))
@@ -357,6 +401,86 @@ class ContainerTestCase(APITestCase):
         self.assertEqual(2000, out["HostConfig"]["MemorySwap"])
         self.assertEqual(1000, out["HostConfig"]["Memory"])
 
+    def test_host_config_port_bindings(self):
+        # create a container with two ports exposed, but only one of the ports bound
+        r = requests.post(
+            self.podman_url + "/v1.40/containers/create",
+            json={
+                "Name": "memory",
+                "Cmd": ["top"],
+                "Image": "alpine:latest",
+                "HostConfig": {
+                    "PortBindings": {
+                        "8080": [{"HostPort": "87634"}]
+                    }
+                },
+                "ExposedPorts": {
+                    "8080": {},
+                    "8081": {}
+                }
+            },
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        payload = r.json()
+        container_id = payload["Id"]
+        self.assertIsNotNone(container_id)
+
+        r = requests.get(self.podman_url +
+                         f"/v1.40/containers/{container_id}/json")
+        self.assertEqual(r.status_code, 200, r.text)
+        inspect_response = r.json()
+        # both ports are in the config
+        self.assertEqual(2, len(inspect_response["Config"]["ExposedPorts"]))
+        self.assertTrue("8080/tcp" in inspect_response["Config"]["ExposedPorts"])
+        self.assertTrue("8081/tcp" in inspect_response["Config"]["ExposedPorts"])
+        # only 8080 one port is bound
+        self.assertEqual(1, len(inspect_response["HostConfig"]["PortBindings"]))
+        self.assertTrue("8080/tcp" in inspect_response["HostConfig"]["PortBindings"])
+        self.assertFalse("8081/tcp" in inspect_response["HostConfig"]["PortBindings"])
+
+def execute_process(cmd):
+    return subprocess.run(
+                cmd,
+                shell=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+def create_named_network_ns(network_ns_name):
+    execute_process(f"ip netns add {network_ns_name}")
+    execute_process(f"ip netns exec {network_ns_name} ip link add enp2s0 type veth peer name eth0")
+    execute_process(f"ip netns exec {network_ns_name} ip addr add 10.0.1.0/24 dev eth0")
+    execute_process(f"ip netns exec {network_ns_name} ip link set eth0 up")
+    execute_process(f"ip netns exec {network_ns_name} ip link add enp2s1 type veth peer name eth1")
+    execute_process(f"ip netns exec {network_ns_name} ip addr add 10.0.2.0/24 dev eth1")
+    execute_process(f"ip netns exec {network_ns_name} ip link set eth1 up")
+
+def delete_named_network_ns(network_ns_name):
+    execute_process(f"ip netns delete {network_ns_name}")
+
+class ContainerCompatibleAPITestCase(APITestCase):
+    def test_inspect_network(self):
+        if os.getuid() != 0:
+            self.skipTest("test needs to be executed as root!")
+        try:
+            network_ns_name = "test-compat-api"
+            create_named_network_ns(network_ns_name)
+            self.podman.run("rm", "--all", "--force", check=True)
+            self.podman.run("run", "--net", f"ns:/run/netns/{network_ns_name}", "-d", "alpine", "top", check=True)
+
+            r = requests.post(self.uri(self.resolve_container("/containers/{}/start")))
+            self.assertIn(r.status_code, (204, 304), r.text)
+
+            r = requests.get(self.compat_uri(self.resolve_container("/containers/{}/json")))
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertId(r.content)
+            out = r.json()
+
+            self.assertEqual("10.0.2.0", out["NetworkSettings"]["SecondaryIPAddresses"][0]["Addr"])
+            self.assertEqual(24, out["NetworkSettings"]["SecondaryIPAddresses"][0]["PrefixLen"])
+        finally:
+            delete_named_network_ns(network_ns_name)
 
 if __name__ == "__main__":
     unittest.main()

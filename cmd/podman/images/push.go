@@ -1,6 +1,7 @@
 package images
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/containers/common/pkg/auth"
@@ -17,8 +18,12 @@ import (
 // CLI-only fields into the API types.
 type pushOptionsWrapper struct {
 	entities.ImagePushOptions
-	TLSVerifyCLI   bool // CLI only
-	CredentialsCLI string
+	TLSVerifyCLI               bool // CLI only
+	CredentialsCLI             string
+	SignPassphraseFileCLI      string
+	SignBySigstoreParamFileCLI string
+	EncryptionKeys             []string
+	EncryptLayers              []int
 }
 
 var (
@@ -106,19 +111,43 @@ func pushFlags(cmd *cobra.Command) {
 	flags.StringVar(&pushOptions.SignBy, signByFlagName, "", "Add a signature at the destination using the specified key")
 	_ = cmd.RegisterFlagCompletionFunc(signByFlagName, completion.AutocompleteNone)
 
+	signBySigstoreFlagName := "sign-by-sigstore"
+	flags.StringVar(&pushOptions.SignBySigstoreParamFileCLI, signBySigstoreFlagName, "", "Sign the image using a sigstore parameter file at `PATH`")
+	_ = cmd.RegisterFlagCompletionFunc(signBySigstoreFlagName, completion.AutocompleteDefault)
+
+	signBySigstorePrivateKeyFlagName := "sign-by-sigstore-private-key"
+	flags.StringVar(&pushOptions.SignBySigstorePrivateKeyFile, signBySigstorePrivateKeyFlagName, "", "Sign the image using a sigstore private key at `PATH`")
+	_ = cmd.RegisterFlagCompletionFunc(signBySigstorePrivateKeyFlagName, completion.AutocompleteDefault)
+
+	signPassphraseFileFlagName := "sign-passphrase-file"
+	flags.StringVar(&pushOptions.SignPassphraseFileCLI, signPassphraseFileFlagName, "", "Read a passphrase for signing an image from `PATH`")
+	_ = cmd.RegisterFlagCompletionFunc(signPassphraseFileFlagName, completion.AutocompleteDefault)
+
 	flags.BoolVar(&pushOptions.TLSVerifyCLI, "tls-verify", true, "Require HTTPS and verify certificates when contacting registries")
 
 	compressionFormat := "compression-format"
 	flags.StringVar(&pushOptions.CompressionFormat, compressionFormat, "", "compression format to use")
 	_ = cmd.RegisterFlagCompletionFunc(compressionFormat, common.AutocompleteCompressionFormat)
 
+	encryptionKeysFlagName := "encryption-key"
+	flags.StringSliceVar(&pushOptions.EncryptionKeys, encryptionKeysFlagName, nil, "Key with the encryption protocol to use to encrypt the image (e.g. jwe:/path/to/key.pem)")
+	_ = cmd.RegisterFlagCompletionFunc(encryptionKeysFlagName, completion.AutocompleteDefault)
+
+	encryptLayersFlagName := "encrypt-layer"
+	flags.IntSliceVar(&pushOptions.EncryptLayers, encryptLayersFlagName, nil, "Layers to encrypt, 0-indexed layer indices with support for negative indexing (e.g. 0 is the first layer, -1 is the last layer). If not defined, will encrypt all layers if encryption-key flag is specified")
+	_ = cmd.RegisterFlagCompletionFunc(encryptLayersFlagName, completion.AutocompleteDefault)
+
 	if registry.IsRemote() {
 		_ = flags.MarkHidden("cert-dir")
 		_ = flags.MarkHidden("compress")
 		_ = flags.MarkHidden("digestfile")
 		_ = flags.MarkHidden("quiet")
-		_ = flags.MarkHidden("remove-signatures")
-		_ = flags.MarkHidden("sign-by")
+		_ = flags.MarkHidden(signByFlagName)
+		_ = flags.MarkHidden(signBySigstoreFlagName)
+		_ = flags.MarkHidden(signBySigstorePrivateKeyFlagName)
+		_ = flags.MarkHidden(signPassphraseFileFlagName)
+		_ = flags.MarkHidden(encryptionKeysFlagName)
+		_ = flags.MarkHidden(encryptLayersFlagName)
 	}
 	if !registry.IsRemote() {
 		flags.StringVar(&pushOptions.SignaturePolicy, "signature-policy", "", "Path to a signature-policy file")
@@ -153,6 +182,24 @@ func imagePush(cmd *cobra.Command, args []string) error {
 		pushOptions.Username = creds.Username
 		pushOptions.Password = creds.Password
 	}
+
+	if !pushOptions.Quiet {
+		pushOptions.Writer = os.Stderr
+	}
+
+	signingCleanup, err := common.PrepareSigning(&pushOptions.ImagePushOptions,
+		pushOptions.SignPassphraseFileCLI, pushOptions.SignBySigstoreParamFileCLI)
+	if err != nil {
+		return err
+	}
+	defer signingCleanup()
+
+	encConfig, encLayers, err := util.EncryptConfig(pushOptions.EncryptionKeys, pushOptions.EncryptLayers)
+	if err != nil {
+		return fmt.Errorf("unable to obtain encryption config: %w", err)
+	}
+	pushOptions.OciEncryptConfig = encConfig
+	pushOptions.OciEncryptLayers = encLayers
 
 	// Let's do all the remaining Yoga in the API to prevent us from scattering
 	// logic across (too) many parts of the code.

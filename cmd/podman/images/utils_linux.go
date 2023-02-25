@@ -1,12 +1,11 @@
 package images
 
 import (
+	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
@@ -16,7 +15,7 @@ import (
 // the caller should use the returned function to clean up the pipeDir
 func setupPipe() (string, func() <-chan error, error) {
 	errc := make(chan error)
-	pipeDir, err := ioutil.TempDir(os.TempDir(), "pipeDir")
+	pipeDir, err := os.MkdirTemp(os.TempDir(), "pipeDir")
 	if err != nil {
 		return "", nil, err
 	}
@@ -26,7 +25,7 @@ func setupPipe() (string, func() <-chan error, error) {
 		if e := os.RemoveAll(pipeDir); e != nil {
 			logrus.Errorf("Removing named pipe: %q", e)
 		}
-		return "", nil, errors.Wrapf(err, "error creating named pipe")
+		return "", nil, fmt.Errorf("creating named pipe: %w", err)
 	}
 	go func() {
 		fpipe, err := os.Open(pipePath)

@@ -1,14 +1,16 @@
 package filters
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/containers/common/pkg/filters"
 	cutil "github.com/containers/common/pkg/util"
 	"github.com/containers/podman/v4/libpod"
 	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/podman/v4/pkg/util"
-	"github.com/pkg/errors"
 )
 
 // GeneratePodFilterFunc takes a filter and filtervalue (key, value)
@@ -59,7 +61,7 @@ func GeneratePodFilterFunc(filter string, filterValues []string, r *libpod.Runti
 	case "ctr-status":
 		for _, filterValue := range filterValues {
 			if !cutil.StringInSlice(filterValue, []string{"created", "running", "paused", "stopped", "exited", "unknown"}) {
-				return nil, errors.Errorf("%s is not a valid status", filterValue)
+				return nil, fmt.Errorf("%s is not a valid status", filterValue)
 			}
 		}
 		return func(p *libpod.Pod) bool {
@@ -96,7 +98,7 @@ func GeneratePodFilterFunc(filter string, filterValues []string, r *libpod.Runti
 	case "status":
 		for _, filterValue := range filterValues {
 			if !cutil.StringInSlice(filterValue, []string{"stopped", "running", "paused", "exited", "dead", "created", "degraded"}) {
-				return nil, errors.Errorf("%s is not a valid pod status", filterValue)
+				return nil, fmt.Errorf("%s is not a valid pod status", filterValue)
 			}
 		}
 		return func(p *libpod.Pod) bool {
@@ -114,7 +116,7 @@ func GeneratePodFilterFunc(filter string, filterValues []string, r *libpod.Runti
 	case "label":
 		return func(p *libpod.Pod) bool {
 			labels := p.Labels()
-			return util.MatchLabelFilters(filterValues, labels)
+			return filters.MatchLabelFilters(filterValues, labels)
 		}, nil
 	case "until":
 		return func(p *libpod.Pod) bool {
@@ -158,5 +160,5 @@ func GeneratePodFilterFunc(filter string, filterValues []string, r *libpod.Runti
 			return false
 		}, nil
 	}
-	return nil, errors.Errorf("%s is an invalid filter", filter)
+	return nil, fmt.Errorf("%s is an invalid filter", filter)
 }

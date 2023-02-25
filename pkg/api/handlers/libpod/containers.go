@@ -1,14 +1,16 @@
 package libpod
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/containers/podman/v4/libpod"
 	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers"
 	"github.com/containers/podman/v4/pkg/api/handlers/compat"
 	"github.com/containers/podman/v4/pkg/api/handlers/utils"
 	api "github.com/containers/podman/v4/pkg/api/types"
@@ -16,7 +18,7 @@ import (
 	"github.com/containers/podman/v4/pkg/domain/infra/abi"
 	"github.com/containers/podman/v4/pkg/util"
 	"github.com/gorilla/schema"
-	"github.com/pkg/errors"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -35,7 +37,7 @@ func ContainerExists(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -45,7 +47,7 @@ func ContainerExists(w http.ResponseWriter, r *http.Request) {
 
 	report, err := containerEngine.ContainerExists(r.Context(), name, options)
 	if err != nil {
-		if errors.Cause(err) == define.ErrNoSuchCtr {
+		if errors.Is(err, define.ErrNoSuchCtr) {
 			utils.ContainerNotFound(w, name, err)
 			return
 		}
@@ -75,12 +77,12 @@ func ListContainers(w http.ResponseWriter, r *http.Request) {
 
 	filterMap, err := util.PrepareFilters(r)
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to decode filter parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to decode filter parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -115,10 +117,6 @@ func ListContainers(w http.ResponseWriter, r *http.Request) {
 		utils.InternalServerError(w, err)
 		return
 	}
-	if len(pss) == 0 {
-		utils.WriteResponse(w, http.StatusOK, "[]")
-		return
-	}
 	utils.WriteResponse(w, http.StatusOK, pss)
 }
 
@@ -131,7 +129,7 @@ func GetContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
@@ -165,6 +163,7 @@ func UnmountContainer(w http.ResponseWriter, r *http.Request) {
 	// "container not mounted" error so we can surface that to the endpoint user
 	if err := conn.Unmount(false); err != nil {
 		utils.InternalServerError(w, err)
+		return
 	}
 	utils.WriteResponse(w, http.StatusNoContent, "")
 }
@@ -180,6 +179,7 @@ func MountContainer(w http.ResponseWriter, r *http.Request) {
 	m, err := conn.Mount()
 	if err != nil {
 		utils.InternalServerError(w, err)
+		return
 	}
 	utils.WriteResponse(w, http.StatusOK, m)
 }
@@ -190,11 +190,13 @@ func ShowMountedContainers(w http.ResponseWriter, r *http.Request) {
 	conns, err := runtime.GetAllContainers()
 	if err != nil {
 		utils.InternalServerError(w, err)
+		return
 	}
 	for _, conn := range conns {
 		mounted, mountPoint, err := conn.Mounted()
 		if err != nil {
 			utils.InternalServerError(w, err)
+			return
 		}
 		if !mounted {
 			continue
@@ -225,7 +227,7 @@ func Checkpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -249,7 +251,7 @@ func Checkpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if query.Export {
-		f, err := ioutil.TempFile("", "checkpoint")
+		f, err := os.CreateTemp("", "checkpoint")
 		if err != nil {
 			utils.InternalServerError(w, err)
 			return
@@ -267,16 +269,16 @@ func Checkpoint(w http.ResponseWriter, r *http.Request) {
 		utils.InternalServerError(w, err)
 		return
 	}
+	if len(reports) != 1 {
+		utils.InternalServerError(w, fmt.Errorf("expected 1 restore report but got %d", len(reports)))
+		return
+	}
+	if reports[0].Err != nil {
+		utils.InternalServerError(w, reports[0].Err)
+		return
+	}
 
 	if !query.Export {
-		if len(reports) != 1 {
-			utils.InternalServerError(w, fmt.Errorf("expected 1 restore report but got %d", len(reports)))
-			return
-		}
-		if reports[0].Err != nil {
-			utils.InternalServerError(w, reports[0].Err)
-			return
-		}
 		utils.WriteResponse(w, http.StatusOK, reports[0])
 		return
 	}
@@ -307,11 +309,12 @@ func Restore(w http.ResponseWriter, r *http.Request) {
 		PrintStats      bool   `schema:"printStats"`
 		FileLocks       bool   `schema:"fileLocks"`
 		PublishPorts    string `schema:"publishPorts"`
+		Pod             string `schema:"pod"`
 	}{
 		// override any golang type defaults
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, fmt.Errorf("failed to parse parameters for %s: %w", r.URL.String(), err))
 		return
 	}
 
@@ -326,11 +329,12 @@ func Restore(w http.ResponseWriter, r *http.Request) {
 		PrintStats:      query.PrintStats,
 		FileLocks:       query.FileLocks,
 		PublishPorts:    strings.Fields(query.PublishPorts),
+		Pod:             query.Pod,
 	}
 
 	var names []string
 	if query.Import {
-		t, err := ioutil.TempFile("", "restore")
+		t, err := os.CreateTemp("", "restore")
 		if err != nil {
 			utils.InternalServerError(w, err)
 			return
@@ -348,11 +352,11 @@ func Restore(w http.ResponseWriter, r *http.Request) {
 			ir := abi.ImageEngine{Libpod: runtime}
 			report, err := ir.Exists(r.Context(), name)
 			if err != nil {
-				utils.Error(w, http.StatusNotFound, errors.Wrapf(err, "failed to find container or checkpoint image %s", name))
+				utils.Error(w, http.StatusNotFound, fmt.Errorf("failed to find container or checkpoint image %s: %w", name, err))
 				return
 			}
 			if !report.Value {
-				utils.Error(w, http.StatusNotFound, errors.Errorf("failed to find container or checkpoint image %s", name))
+				utils.Error(w, http.StatusNotFound, fmt.Errorf("failed to find container or checkpoint image %s", name))
 				return
 			}
 		}
@@ -384,7 +388,7 @@ func InitContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = ctr.Init(r.Context(), ctr.PodID() != "")
-	if errors.Cause(err) == define.ErrCtrStateInvalid {
+	if errors.Is(err, define.ErrCtrStateInvalid) {
 		utils.Error(w, http.StatusNotModified, err)
 		return
 	}
@@ -393,6 +397,28 @@ func InitContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.WriteResponse(w, http.StatusNoContent, "")
+}
+
+func UpdateContainer(w http.ResponseWriter, r *http.Request) {
+	name := utils.GetName(r)
+	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
+	ctr, err := runtime.LookupContainer(name)
+	if err != nil {
+		utils.ContainerNotFound(w, name, err)
+		return
+	}
+
+	options := &handlers.UpdateEntities{Resources: &specs.LinuxResources{}}
+	if err := json.NewDecoder(r.Body).Decode(&options.Resources); err != nil {
+		utils.Error(w, http.StatusInternalServerError, fmt.Errorf("decode(): %w", err))
+		return
+	}
+	err = ctr.Update(options.Resources)
+	if err != nil {
+		utils.InternalServerError(w, err)
+		return
+	}
+	utils.WriteResponse(w, http.StatusCreated, ctr.ID())
 }
 
 func ShouldRestart(w http.ResponseWriter, r *http.Request) {
@@ -404,7 +430,7 @@ func ShouldRestart(w http.ResponseWriter, r *http.Request) {
 	name := utils.GetName(r)
 	report, err := containerEngine.ShouldRestart(r.Context(), name)
 	if err != nil {
-		if errors.Cause(err) == define.ErrNoSuchCtr {
+		if errors.Is(err, define.ErrNoSuchCtr) {
 			utils.ContainerNotFound(w, name, err)
 			return
 		}

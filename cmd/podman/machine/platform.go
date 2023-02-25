@@ -8,6 +8,6 @@ import (
 	"github.com/containers/podman/v4/pkg/machine/qemu"
 )
 
-func GetSystemDefaultProvider() machine.Provider {
-	return qemu.GetQemuProvider()
+func GetSystemDefaultProvider() machine.VirtProvider {
+	return qemu.GetVirtualizationProvider()
 }

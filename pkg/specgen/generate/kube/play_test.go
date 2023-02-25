@@ -1,8 +1,9 @@
+//go:build linux
+// +build linux
+
 package kube
 
 import (
-	"encoding/json"
-	"fmt"
 	"math"
 	"runtime"
 	"strconv"
@@ -12,7 +13,10 @@ import (
 	v1 "github.com/containers/podman/v4/pkg/k8s.io/api/core/v1"
 	"github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/api/resource"
 	v12 "github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/util/intstr"
+	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/docker/docker/pkg/system"
+	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -25,15 +29,213 @@ func createSecrets(t *testing.T, d string) *secrets.SecretsManager {
 		"path": d,
 	}
 
+	storeOpts := secrets.StoreOptions{
+		DriverOpts: driverOpts,
+	}
+
 	for _, s := range k8sSecrets {
-		data, err := json.Marshal(s.Data)
+		data, err := yaml.Marshal(s)
 		assert.NoError(t, err)
 
-		_, err = secretsManager.Store(s.ObjectMeta.Name, data, driver, driverOpts)
+		_, err = secretsManager.Store(s.ObjectMeta.Name, data, driver, storeOpts)
 		assert.NoError(t, err)
 	}
 
 	return secretsManager
+}
+
+func TestConfigMapVolumes(t *testing.T) {
+	yes := true
+	tests := []struct {
+		name          string
+		volume        v1.Volume
+		configmaps    []v1.ConfigMap
+		errorMessage  string
+		expectedItems map[string][]byte
+	}{
+		{
+			"VolumeFromConfigmap",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "bar",
+						},
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"myvar": []byte("bar")},
+		},
+		{
+			"VolumeFromBinaryConfigmap",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "binary-bar",
+						},
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"myvar": []byte("bin-bar")},
+		},
+		{
+			"ConfigmapMissing",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "fizz",
+						},
+					},
+				},
+			},
+			configMapList,
+			`no such ConfigMap "fizz"`,
+			map[string][]byte{},
+		},
+		{
+			"ConfigmapMissingOptional",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "fizz",
+						},
+						Optional: &yes,
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{},
+		},
+		{
+			"MultiValue",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "multi-item",
+						},
+						Optional: &yes,
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"foo": []byte("bar"), "fizz": []byte("buzz")},
+		},
+		{
+			"SpecificValue",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "multi-item",
+						},
+						Optional: &yes,
+						Items:    []v1.KeyToPath{{Key: "fizz", Path: "/custom/path"}},
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"/custom/path": []byte("buzz")},
+		},
+		{
+			"MultiValueBinary",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "multi-binary-item",
+						},
+						Optional: &yes,
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"foo": []byte("bin-bar"), "fizz": []byte("bin-buzz")},
+		},
+		{
+			"SpecificValueBinary",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "multi-binary-item",
+						},
+						Optional: &yes,
+						Items:    []v1.KeyToPath{{Key: "fizz", Path: "/custom/path"}},
+					},
+				},
+			},
+			configMapList,
+			"",
+			map[string][]byte{"/custom/path": []byte("bin-buzz")},
+		},
+		{
+			"DuplicateValues",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "dupe",
+						},
+					},
+				},
+			},
+			configMapList,
+			`the ConfigMap "dupe" is invalid: duplicate key "foo" present in data and binaryData`,
+			map[string][]byte{},
+		},
+		{
+			"DuplicateValuesSpecific",
+			v1.Volume{
+				Name: "test-volume",
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "dupe",
+						},
+						Items: []v1.KeyToPath{{Key: "fizz", Path: "/custom/path"}},
+					},
+				},
+			},
+			configMapList,
+			`the ConfigMap "dupe" is invalid: duplicate key "foo" present in data and binaryData`,
+			map[string][]byte{},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			result, err := VolumeFromConfigMap(test.volume.ConfigMap, test.configmaps)
+			if test.errorMessage == "" {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expectedItems, result.Items)
+			} else {
+				assert.Error(t, err)
+				assert.Equal(t, test.errorMessage, err.Error())
+			}
+		})
+	}
 }
 
 func TestEnvVarsFrom(t *testing.T) {
@@ -157,6 +359,61 @@ func TestEnvVarsFrom(t *testing.T) {
 			},
 			false,
 			nil,
+		},
+		{
+			"SecretExistsMultipleDataEntries",
+			v1.EnvFromSource{
+				SecretRef: &v1.SecretEnvSource{
+					LocalObjectReference: v1.LocalObjectReference{
+						Name: "multi-data",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				SecretsManager: secretsManager,
+			},
+			true,
+			map[string]string{
+				"myvar":  "foo",
+				"myvar1": "foo1",
+			},
+		},
+		{
+			"SecretExistsMultipleStringDataEntries",
+			v1.EnvFromSource{
+				SecretRef: &v1.SecretEnvSource{
+					LocalObjectReference: v1.LocalObjectReference{
+						Name: "multi-stringdata",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				SecretsManager: secretsManager,
+			},
+			true,
+			map[string]string{
+				"myvar":  "foo",
+				"myvar1": "foo1",
+			},
+		},
+		{
+			"SecretExistsMultipleDataStringDataEntries",
+			v1.EnvFromSource{
+				SecretRef: &v1.SecretEnvSource{
+					LocalObjectReference: v1.LocalObjectReference{
+						Name: "multi-data-stringdata",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				SecretsManager: secretsManager,
+			},
+			true,
+			map[string]string{
+				"myvardata":   "foodata",
+				"myvar1":      "foo1string", // stringData overwrites data
+				"myvarstring": "foostring",
+			},
 		},
 		{
 			"OptionalSecretDoesNotExist",
@@ -777,8 +1034,7 @@ func TestEnvVarValue(t *testing.T) {
 			if test.expected == nilString {
 				assert.Nil(t, result)
 			} else {
-				fmt.Println(*result, test.expected)
-				assert.Equal(t, &(test.expected), result)
+				assert.Equal(t, test.expected, *result)
 			}
 		})
 	}
@@ -809,6 +1065,56 @@ var (
 				"myvar": "foo",
 			},
 		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "binary-bar",
+			},
+			BinaryData: map[string][]byte{
+				"myvar": []byte("bin-bar"),
+			},
+		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "multi-item",
+			},
+			Data: map[string]string{
+				"foo":  "bar",
+				"fizz": "buzz",
+			},
+		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "multi-binary-item",
+			},
+			BinaryData: map[string][]byte{
+				"foo":  []byte("bin-bar"),
+				"fizz": []byte("bin-buzz"),
+			},
+		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "dupe",
+			},
+			BinaryData: map[string][]byte{
+				"fiz": []byte("bin-buzz"),
+				"foo": []byte("bin-bar"),
+			},
+			Data: map[string]string{
+				"foo": "bar",
+			},
+		},
 	}
 
 	optional = true
@@ -836,6 +1142,46 @@ var (
 				"myvar": []byte("foo"),
 			},
 		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "Secret",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "multi-data",
+			},
+			Data: map[string][]byte{
+				"myvar":  []byte("foo"),
+				"myvar1": []byte("foo1"),
+			},
+		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "Secret",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "multi-stringdata",
+			},
+			StringData: map[string]string{
+				"myvar":  string("foo"),
+				"myvar1": string("foo1"),
+			},
+		},
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "Secret",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "multi-data-stringdata",
+			},
+			Data: map[string][]byte{
+				"myvardata": []byte("foodata"),
+				"myvar1":    []byte("foo1data"),
+			},
+			StringData: map[string]string{
+				"myvarstring": string("foostring"),
+				"myvar1":      string("foo1string"),
+			},
+		},
 	}
 
 	cpuInt       = 4
@@ -856,3 +1202,59 @@ var (
 		},
 	}
 )
+
+func TestHttpLivenessProbe(t *testing.T) {
+	tests := []struct {
+		name          string
+		specGenerator specgen.SpecGenerator
+		container     v1.Container
+		restartPolicy string
+		succeed       bool
+		expectedURL   string
+	}{
+		{
+			"HttpLivenessProbeUrlSetCorrectly",
+			specgen.SpecGenerator{},
+			v1.Container{
+				LivenessProbe: &v1.Probe{
+					Handler: v1.Handler{
+						HTTPGet: &v1.HTTPGetAction{
+							Scheme: "http",
+							Host:   "127.0.0.1",
+							Port:   intstr.FromInt(8080),
+							Path:   "/health",
+						},
+					},
+				},
+			},
+			"always",
+			true,
+			"http://127.0.0.1:8080/health",
+		},
+		{
+			"HttpLivenessProbeUrlUsesDefaults",
+			specgen.SpecGenerator{},
+			v1.Container{
+				LivenessProbe: &v1.Probe{
+					Handler: v1.Handler{
+						HTTPGet: &v1.HTTPGetAction{
+							Port: intstr.FromInt(80),
+						},
+					},
+				},
+			},
+			"always",
+			true,
+			"http://localhost:80/",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			err := setupLivenessProbe(&test.specGenerator, test.container, test.restartPolicy)
+			assert.Equal(t, err == nil, test.succeed)
+			assert.Contains(t, test.specGenerator.ContainerHealthCheckConfig.HealthConfig.Test, test.expectedURL)
+		})
+	}
+}

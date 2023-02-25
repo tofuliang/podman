@@ -6,10 +6,10 @@ package wsl
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,17 +18,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v4/pkg/machine"
 	"github.com/containers/podman/v4/utils"
 	"github.com/containers/storage/pkg/homedir"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
 
 var (
-	wslProvider = &Provider{}
 	// vmtype refers to qemu (vs libvirt, krun, etc)
 	vmtype = "wsl"
 )
@@ -36,14 +35,16 @@ var (
 const (
 	ErrorSuccessRebootInitiated = 1641
 	ErrorSuccessRebootRequired  = 3010
-	currentMachineVersion       = 2
+	currentMachineVersion       = 3
 )
 
 const containersConf = `[containers]
 
 [engine]
 cgroup_manager = "cgroupfs"
-events_logger = "file"
+`
+
+const registriesConf = `unqualified-search-registries=["docker.io"]
 `
 
 const appendPort = `grep -q Port\ %d /etc/ssh/sshd_config || echo Port %d >> /etc/ssh/sshd_config`
@@ -55,7 +56,9 @@ rm -f /etc/systemd/system/getty.target.wants/getty@tty1.service
 rm -f /etc/systemd/system/multi-user.target.wants/systemd-resolved.service
 rm -f /etc/systemd/system/dbus-org.freedesktop.resolve1.service
 ln -fs /dev/null /etc/systemd/system/console-getty.service
+ln -fs /dev/null /etc/systemd/system/systemd-oomd.socket
 mkdir -p /etc/systemd/system/systemd-sysusers.service.d/
+echo CREATE_MAIL_SPOOL=no >> /etc/default/useradd
 adduser -m [USER] -G wheel
 mkdir -p /home/[USER]/.config/systemd/[USER]/
 chown [USER]:[USER] /home/[USER]/.config
@@ -88,14 +91,27 @@ fi
 
 const enterns = "#!/bin/bash\n" + sysdpid + `
 if [ ! -z "$SYSDPID" ] && [ "$SYSDPID" != "1" ]; then
-	nsenter -m -p -t $SYSDPID "$@"
-fi
-`
+        NSENTER=("nsenter" "-m" "-p" "-t" "$SYSDPID" "--wd=$PWD")
+
+        if [ "$UID" != "0" ]; then
+                NSENTER=("sudo" "${NSENTER[@]}")
+                if [ "$#" != "0" ]; then
+                        NSENTER+=("sudo" "-u" "$USER")
+                else
+                        NSENTER+=("su" "-l" "$USER")
+                fi
+        fi
+        "${NSENTER[@]}" "$@"
+fi`
 
 const waitTerm = sysdpid + `
 if [ ! -z "$SYSDPID" ]; then
 	timeout 60 tail -f /dev/null --pid $SYSDPID
 fi
+`
+
+const wslConf = `[user]
+default=[USER]
 `
 
 // WSL kernel does not have sg and crypto_user modules
@@ -115,6 +131,43 @@ const lingerSetup = `mkdir -p /home/[USER]/.config/systemd/[USER]/default.target
 ln -fs /home/[USER]/.config/systemd/[USER]/linger-example.service \
        /home/[USER]/.config/systemd/[USER]/default.target.wants/linger-example.service
 `
+
+const proxyConfigSetup = `#!/bin/bash
+
+SYSTEMD_CONF=/etc/systemd/system.conf.d/default-env.conf
+ENVD_CONF=/etc/environment.d/default-env.conf
+PROFILE_CONF=/etc/profile.d/default-env.sh
+
+IFS="|"
+read proxies
+
+mkdir -p /etc/profile.d /etc/environment.d /etc/systemd/system.conf.d/
+rm -f $SYSTEMD_CONF
+for proxy in $proxies; do
+	output+="$proxy "
+done
+echo "[Manager]" >> $SYSTEMD_CONF
+echo -ne "DefaultEnvironment=" >> $SYSTEMD_CONF
+
+echo $output >> $SYSTEMD_CONF
+rm -f $ENVD_CONF
+for proxy in $proxies; do
+	echo "$proxy" >> $ENVD_CONF
+done
+rm -f $PROFILE_CONF
+for proxy in $proxies; do
+	echo "export $proxy" >> $PROFILE_CONF
+done
+`
+
+const proxyConfigAttempt = `if [ -f /usr/local/bin/proxyinit ]; \
+then /usr/local/bin/proxyinit; \
+else exit 42; \
+fi`
+
+const clearProxySettings = `rm -f /etc/systemd/system.conf.d/default-env.conf \
+	   /etc/environment.d/default-env.conf \
+	   /etc/profile.d/default-env.sh`
 
 const wslInstallError = `Could not %s. See previous output for any potential failure details.
 If you can not resolve the issue, and rerunning fails, try the "wsl --install" process
@@ -150,7 +203,23 @@ const (
 	globalPipe     = "docker_engine"
 )
 
-type Provider struct{}
+type Virtualization struct {
+	artifact    machine.Artifact
+	compression machine.ImageCompression
+	format      machine.ImageFormat
+}
+
+func (p *Virtualization) Artifact() machine.Artifact {
+	return p.artifact
+}
+
+func (p *Virtualization) Compression() machine.ImageCompression {
+	return p.compression
+}
+
+func (p *Virtualization) Format() machine.ImageFormat {
+	return p.format
+}
 
 type MachineVM struct {
 	// ConfigPath is the path to the configuration file
@@ -181,12 +250,16 @@ func (e *ExitCodeError) Error() string {
 	return fmt.Sprintf("Process failed with exit code: %d", e.code)
 }
 
-func GetWSLProvider() machine.Provider {
-	return wslProvider
+func GetWSLProvider() machine.VirtProvider {
+	return &Virtualization{
+		artifact:    machine.None,
+		compression: machine.Xz,
+		format:      machine.Tar,
+	}
 }
 
 // NewMachine initializes an instance of a wsl machine
-func (p *Provider) NewMachine(opts machine.InitOptions) (machine.VM, error) {
+func (p *Virtualization) NewMachine(opts machine.InitOptions) (machine.VM, error) {
 	vm := new(MachineVM)
 	if len(opts.Name) > 0 {
 		vm.Name = opts.Name
@@ -213,16 +286,21 @@ func (p *Provider) NewMachine(opts machine.InitOptions) (machine.VM, error) {
 }
 
 func getConfigPath(name string) (string, error) {
+	return getConfigPathExt(name, "json")
+}
+
+func getConfigPathExt(name string, extension string) (string, error) {
 	vmConfigDir, err := machine.GetConfDir(vmtype)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(vmConfigDir, name+".json"), nil
+
+	return filepath.Join(vmConfigDir, fmt.Sprintf("%s.%s", name, extension)), nil
 }
 
 // LoadByName reads a json file that describes a known qemu vm
 // and returns a vm instance
-func (p *Provider) LoadVMByName(name string) (machine.VM, error) {
+func (p *Virtualization) LoadVMByName(name string) (machine.VM, error) {
 	configPath, err := getConfigPath(name)
 	if err != nil {
 		return nil, err
@@ -239,7 +317,7 @@ func readAndMigrate(configPath string, name string) (*MachineVM, error) {
 	b, err := os.ReadFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.Wrap(machine.ErrNoSuchVM, name)
+			return nil, fmt.Errorf("%v: %w", name, machine.ErrNoSuchVM)
 		}
 		return vm, err
 	}
@@ -260,6 +338,11 @@ func (v *MachineVM) migrateMachine(configPath string) error {
 
 	// Update older machines to use lingering
 	if err := enableUserLinger(v, toDist(v.Name)); err != nil {
+		return err
+	}
+
+	// Update older machines missing unqualified search config
+	if err := configureRegistries(v, toDist(v.Name)); err != nil {
 		return err
 	}
 
@@ -300,6 +383,7 @@ func (v *MachineVM) Init(opts machine.InitOptions) (bool, error) {
 		return cont, err
 	}
 
+	_ = setupWslProxyEnv()
 	homeDir := homedir.Get()
 	sshDir := filepath.Join(homeDir, ".ssh")
 	v.IdentityPath = filepath.Join(sshDir, v.Name)
@@ -307,14 +391,6 @@ func (v *MachineVM) Init(opts machine.InitOptions) (bool, error) {
 	v.Version = currentMachineVersion
 
 	if err := downloadDistro(v, opts); err != nil {
-		return false, err
-	}
-
-	if err := v.writeConfig(); err != nil {
-		return false, err
-	}
-
-	if err := setupConnections(v, opts, sshDir); err != nil {
 		return false, err
 	}
 
@@ -336,6 +412,17 @@ func (v *MachineVM) Init(opts machine.InitOptions) (bool, error) {
 		return false, err
 	}
 
+	// Cycle so that user change goes into effect
+	_ = terminateDist(dist)
+
+	if err := v.writeConfig(); err != nil {
+		return false, err
+	}
+
+	if err := setupConnections(v, opts, sshDir); err != nil {
+		return false, err
+	}
+
 	return true, nil
 }
 
@@ -347,7 +434,7 @@ func downloadDistro(v *MachineVM, opts machine.InitOptions) error {
 
 	if _, e := strconv.Atoi(opts.ImagePath); e == nil {
 		v.ImageStream = opts.ImagePath
-		dd, err = machine.NewFedoraDownloader(vmtype, v.Name, v.ImageStream)
+		dd, err = NewFedoraDownloader(vmtype, v.Name, opts.ImagePath)
 	} else {
 		v.ImageStream = "custom"
 		dd, err = machine.NewGenericDownloader(vmtype, v.Name, opts.ImagePath)
@@ -361,14 +448,24 @@ func downloadDistro(v *MachineVM, opts machine.InitOptions) error {
 }
 
 func (v *MachineVM) writeConfig() error {
+	const format = "could not write machine json config: %w"
 	jsonFile := v.ConfigPath
-
-	b, err := json.MarshalIndent(v, "", " ")
+	tmpFile, err := getConfigPathExt(v.Name, "tmp")
 	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(jsonFile, b, 0644); err != nil {
-		return errors.Wrap(err, "could not write machine json config")
+
+	b, err := json.MarshalIndent(v, "", " ")
+	if err != nil {
+		return fmt.Errorf(format, err)
+	}
+
+	if err := os.WriteFile(tmpFile, b, 0644); err != nil {
+		return fmt.Errorf(format, err)
+	}
+
+	if err := os.Rename(tmpFile, jsonFile); err != nil {
+		return fmt.Errorf(format, err)
 	}
 
 	return nil
@@ -406,45 +503,25 @@ func provisionWSLDist(v *MachineVM) (string, error) {
 	distDir := filepath.Join(vmDataDir, "wsldist")
 	distTarget := filepath.Join(distDir, v.Name)
 	if err := os.MkdirAll(distDir, 0755); err != nil {
-		return "", errors.Wrap(err, "could not create wsldist directory")
+		return "", fmt.Errorf("could not create wsldist directory: %w", err)
 	}
 
 	dist := toDist(v.Name)
-	fmt.Println("Importing operating system into WSL (this may take 5+ minutes on a new WSL install)...")
-	if err = runCmdPassThrough("wsl", "--import", dist, distTarget, v.ImagePath); err != nil {
-		return "", errors.Wrap(err, "WSL import of guest OS failed")
-	}
-
-	fmt.Println("Installing packages (this will take awhile)...")
-	if err = runCmdPassThrough("wsl", "-d", dist, "dnf", "upgrade", "-y"); err != nil {
-		return "", errors.Wrap(err, "package upgrade on guest OS failed")
-	}
-
-	fmt.Println("Enabling Copr")
-	if err = runCmdPassThrough("wsl", "-d", dist, "dnf", "install", "-y", "'dnf-command(copr)'"); err != nil {
-		return "", errors.Wrap(err, "enabling copr failed")
-	}
-
-	fmt.Println("Enabling podman4 repo")
-	if err = runCmdPassThrough("wsl", "-d", dist, "dnf", "-y", "copr", "enable", "rhcontainerbot/podman4"); err != nil {
-		return "", errors.Wrap(err, "enabling copr failed")
-	}
-
-	if err = runCmdPassThrough("wsl", "-d", dist, "dnf", "install",
-		"podman", "podman-docker", "openssh-server", "procps-ng", "-y"); err != nil {
-		return "", errors.Wrap(err, "package installation on guest OS failed")
+	fmt.Println("Importing operating system into WSL (this may take a few minutes on a new WSL install)...")
+	if err = runCmdPassThrough("wsl", "--import", dist, distTarget, v.ImagePath, "--version", "2"); err != nil {
+		return "", fmt.Errorf("the WSL import of guest OS failed: %w", err)
 	}
 
 	// Fixes newuidmap
-	if err = runCmdPassThrough("wsl", "-d", dist, "dnf", "reinstall", "shadow-utils", "-y"); err != nil {
-		return "", errors.Wrap(err, "package reinstallation of shadow-utils on guest OS failed")
+	if err = wslInvoke(dist, "rpm", "-q", "--restore", "shadow-utils", "2>/dev/null"); err != nil {
+		return "", fmt.Errorf("package permissions restore of shadow-utils on guest OS failed: %w", err)
 	}
 
 	// Windows 11 (NT Version = 10, Build 22000) generates harmless but scary messages on every
 	// operation when mount was not present on the initial start. Force a cycle so that it won't
 	// repeatedly complain.
 	if winVersionAtLeast(10, 0, 22000) {
-		if err := runCmdPassThrough("wsl", "--terminate", dist); err != nil {
+		if err := terminateDist(dist); err != nil {
 			logrus.Warnf("could not cycle WSL dist: %s", err.Error())
 		}
 	}
@@ -456,28 +533,28 @@ func createKeys(v *MachineVM, dist string, sshDir string) error {
 	user := v.RemoteUsername
 
 	if err := os.MkdirAll(sshDir, 0700); err != nil {
-		return errors.Wrap(err, "could not create ssh directory")
+		return fmt.Errorf("could not create ssh directory: %w", err)
 	}
 
-	if err := runCmdPassThrough("wsl", "--terminate", dist); err != nil {
-		return errors.Wrap(err, "could not cycle WSL dist")
+	if err := terminateDist(dist); err != nil {
+		return fmt.Errorf("could not cycle WSL dist: %w", err)
 	}
 
-	key, err := machine.CreateSSHKeysPrefix(sshDir, v.Name, true, true, "wsl", "-d", dist)
+	key, err := wslCreateKeys(sshDir, v.Name, dist)
 	if err != nil {
-		return errors.Wrap(err, "could not create ssh keys")
+		return fmt.Errorf("could not create ssh keys: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", key+"\n", "-d", dist, "sh", "-c", "mkdir -p /root/.ssh;"+
+	if err := wslPipe(key+"\n", dist, "sh", "-c", "mkdir -p /root/.ssh;"+
 		"cat >> /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys"); err != nil {
-		return errors.Wrap(err, "could not create root authorized keys on guest OS")
+		return fmt.Errorf("could not create root authorized keys on guest OS: %w", err)
 	}
 
 	userAuthCmd := withUser("mkdir -p /home/[USER]/.ssh;"+
 		"cat >> /home/[USER]/.ssh/authorized_keys; chown -R [USER]:[USER] /home/[USER]/.ssh;"+
 		"chmod 600 /home/[USER]/.ssh/authorized_keys", user)
-	if err := pipeCmdPassThrough("wsl", key+"\n", "-d", dist, "sh", "-c", userAuthCmd); err != nil {
-		return errors.Wrapf(err, "could not create '%s' authorized keys on guest OS", v.RemoteUsername)
+	if err := wslPipe(key+"\n", dist, "sh", "-c", userAuthCmd); err != nil {
+		return fmt.Errorf("could not create '%s' authorized keys on guest OS: %w", v.RemoteUsername, err)
 	}
 
 	return nil
@@ -485,42 +562,85 @@ func createKeys(v *MachineVM, dist string, sshDir string) error {
 
 func configureSystem(v *MachineVM, dist string) error {
 	user := v.RemoteUsername
-	if err := runCmdPassThrough("wsl", "-d", dist, "sh", "-c", fmt.Sprintf(appendPort, v.Port, v.Port)); err != nil {
-		return errors.Wrap(err, "could not configure SSH port for guest OS")
+	if err := wslInvoke(dist, "sh", "-c", fmt.Sprintf(appendPort, v.Port, v.Port)); err != nil {
+		return fmt.Errorf("could not configure SSH port for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", withUser(configServices, user), "-d", dist, "sh"); err != nil {
-		return errors.Wrap(err, "could not configure systemd settings for guest OS")
+	if err := wslPipe(withUser(configServices, user), dist, "sh"); err != nil {
+		return fmt.Errorf("could not configure systemd settings for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", sudoers, "-d", dist, "sh", "-c", "cat >> /etc/sudoers"); err != nil {
-		return errors.Wrap(err, "could not add wheel to sudoers")
+	if err := wslPipe(sudoers, dist, "sh", "-c", "cat >> /etc/sudoers"); err != nil {
+		return fmt.Errorf("could not add wheel to sudoers: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", overrideSysusers, "-d", dist, "sh", "-c",
+	if err := wslPipe(overrideSysusers, dist, "sh", "-c",
 		"cat > /etc/systemd/system/systemd-sysusers.service.d/override.conf"); err != nil {
-		return errors.Wrap(err, "could not generate systemd-sysusers override for guest OS")
+		return fmt.Errorf("could not generate systemd-sysusers override for guest OS: %w", err)
 	}
 
 	lingerCmd := withUser("cat > /home/[USER]/.config/systemd/[USER]/linger-example.service", user)
-	if err := pipeCmdPassThrough("wsl", lingerService, "-d", dist, "sh", "-c", lingerCmd); err != nil {
-		return errors.Wrap(err, "could not generate linger service for guest OS")
+	if err := wslPipe(lingerService, dist, "sh", "-c", lingerCmd); err != nil {
+		return fmt.Errorf("could not generate linger service for guest OS: %w", err)
 	}
 
 	if err := enableUserLinger(v, dist); err != nil {
 		return err
 	}
 
-	if err := pipeCmdPassThrough("wsl", withUser(lingerSetup, user), "-d", dist, "sh"); err != nil {
-		return errors.Wrap(err, "could not configure systemd settomgs for guest OS")
+	if err := wslPipe(withUser(lingerSetup, user), dist, "sh"); err != nil {
+		return fmt.Errorf("could not configure systemd settings for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", containersConf, "-d", dist, "sh", "-c", "cat > /etc/containers/containers.conf"); err != nil {
-		return errors.Wrap(err, "could not create containers.conf for guest OS")
+	if err := wslPipe(containersConf, dist, "sh", "-c", "cat > /etc/containers/containers.conf"); err != nil {
+		return fmt.Errorf("could not create containers.conf for guest OS: %w", err)
 	}
 
-	if err := runCmdPassThrough("wsl", "-d", dist, "sh", "-c", "echo wsl > /etc/containers/podman-machine"); err != nil {
-		return errors.Wrap(err, "could not create podman-machine file for guest OS")
+	if err := configureRegistries(v, dist); err != nil {
+		return err
+	}
+
+	if err := wslInvoke(dist, "sh", "-c", "echo wsl > /etc/containers/podman-machine"); err != nil {
+		return fmt.Errorf("could not create podman-machine file for guest OS: %w", err)
+	}
+
+	if err := wslPipe(withUser(wslConf, user), dist, "sh", "-c", "cat > /etc/wsl.conf"); err != nil {
+		return fmt.Errorf("could not configure wsl config for guest OS: %w", err)
+	}
+
+	return nil
+}
+
+func configureProxy(dist string, useProxy bool, quiet bool) error {
+	if !useProxy {
+		_ = wslInvoke(dist, "sh", "-c", clearProxySettings)
+		return nil
+	}
+	var content string
+	for i, key := range config.ProxyEnv {
+		if value, _ := os.LookupEnv(key); len(value) > 0 {
+			var suffix string
+			if i < (len(config.ProxyEnv) - 1) {
+				suffix = "|"
+			}
+			content = fmt.Sprintf("%s%s=\"%s\"%s", content, key, value, suffix)
+		}
+	}
+
+	if err := wslPipe(content, dist, "sh", "-c", proxyConfigAttempt); err != nil {
+		const failMessage = "Failure creating proxy configuration"
+		if exitErr, isExit := err.(*exec.ExitError); isExit && exitErr.ExitCode() != 42 {
+			return fmt.Errorf("%v: %w", failMessage, err)
+		}
+		if !quiet {
+			fmt.Println("Installing proxy support")
+		}
+		_ = wslPipe(proxyConfigSetup, dist, "sh", "-c",
+			"cat > /usr/local/bin/proxyinit; chmod 755 /usr/local/bin/proxyinit")
+
+		if err = wslPipe(content, dist, "/usr/local/bin/proxyinit"); err != nil {
+			return fmt.Errorf("%v: %w", failMessage, err)
+		}
 	}
 
 	return nil
@@ -528,44 +648,58 @@ func configureSystem(v *MachineVM, dist string) error {
 
 func enableUserLinger(v *MachineVM, dist string) error {
 	lingerCmd := "mkdir -p /var/lib/systemd/linger; touch /var/lib/systemd/linger/" + v.RemoteUsername
-	if err := runCmdPassThrough("wsl", "-d", dist, "sh", "-c", lingerCmd); err != nil {
-		return errors.Wrap(err, "could not enable linger for remote user on guest OS")
+	if err := wslInvoke(dist, "sh", "-c", lingerCmd); err != nil {
+		return fmt.Errorf("could not enable linger for remote user on guest OS: %w", err)
+	}
+
+	return nil
+}
+
+func configureRegistries(v *MachineVM, dist string) error {
+	cmd := "cat > /etc/containers/registries.conf.d/999-podman-machine.conf"
+	if err := wslPipe(registriesConf, dist, "sh", "-c", cmd); err != nil {
+		return fmt.Errorf("could not configure registries on guest OS: %w", err)
 	}
 
 	return nil
 }
 
 func installScripts(dist string) error {
-	if err := pipeCmdPassThrough("wsl", enterns, "-d", dist, "sh", "-c",
+	if err := wslPipe(enterns, dist, "sh", "-c",
 		"cat > /usr/local/bin/enterns; chmod 755 /usr/local/bin/enterns"); err != nil {
-		return errors.Wrap(err, "could not create enterns script for guest OS")
+		return fmt.Errorf("could not create enterns script for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", profile, "-d", dist, "sh", "-c",
+	if err := wslPipe(profile, dist, "sh", "-c",
 		"cat > /etc/profile.d/enterns.sh"); err != nil {
-		return errors.Wrap(err, "could not create motd profile script for guest OS")
+		return fmt.Errorf("could not create motd profile script for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", wslmotd, "-d", dist, "sh", "-c", "cat > /etc/wslmotd"); err != nil {
-		return errors.Wrap(err, "could not create a WSL MOTD for guest OS")
+	if err := wslPipe(wslmotd, dist, "sh", "-c", "cat > /etc/wslmotd"); err != nil {
+		return fmt.Errorf("could not create a WSL MOTD for guest OS: %w", err)
 	}
 
-	if err := pipeCmdPassThrough("wsl", bootstrap, "-d", dist, "sh", "-c",
+	if err := wslPipe(bootstrap, dist, "sh", "-c",
 		"cat > /root/bootstrap; chmod 755 /root/bootstrap"); err != nil {
-		return errors.Wrap(err, "could not create bootstrap script for guest OS")
+		return fmt.Errorf("could not create bootstrap script for guest OS: %w", err)
+	}
+
+	if err := wslPipe(proxyConfigSetup, dist, "sh", "-c",
+		"cat > /usr/local/bin/proxyinit; chmod 755 /usr/local/bin/proxyinit"); err != nil {
+		return fmt.Errorf("could not create proxyinit script for guest OS: %w", err)
 	}
 
 	return nil
 }
 
 func checkAndInstallWSL(opts machine.InitOptions) (bool, error) {
-	if isWSLInstalled() {
+	if IsWSLInstalled() {
 		return true, nil
 	}
 
 	admin := hasAdminRights()
 
-	if !isWSLFeatureEnabled() {
+	if !IsWSLFeatureEnabled() {
 		return false, attemptFeatureInstall(opts, admin)
 	}
 
@@ -595,10 +729,10 @@ func checkAndInstallWSL(opts machine.InitOptions) (bool, error) {
 
 func attemptFeatureInstall(opts machine.InitOptions, admin bool) error {
 	if !winVersionAtLeast(10, 0, 18362) {
-		return errors.Errorf("Your version of Windows does not support WSL. Update to Windows 10 Build 19041 or later")
+		return errors.New("your version of Windows does not support WSL. Update to Windows 10 Build 19041 or later")
 	} else if !winVersionAtLeast(10, 0, 19041) {
 		fmt.Fprint(os.Stderr, wslOldVersion)
-		return errors.Errorf("WSL can not be automatically installed")
+		return errors.New("the WSL can not be automatically installed")
 	}
 
 	message := "WSL is not installed on this system, installing it.\n\n"
@@ -612,7 +746,7 @@ func attemptFeatureInstall(opts machine.InitOptions, admin bool) error {
 		"If you prefer, you may abort now, and perform a manual installation using the \"wsl --install\" command."
 
 	if !opts.ReExec && MessageBox(message, "Podman Machine", false) != 1 {
-		return errors.Errorf("WSL installation aborted")
+		return errors.New("the WSL installation aborted")
 	}
 
 	if !opts.ReExec && !admin {
@@ -648,12 +782,12 @@ func installWsl() error {
 	defer log.Close()
 	if err := runCmdPassThroughTee(log, "dism", "/online", "/enable-feature",
 		"/featurename:Microsoft-Windows-Subsystem-Linux", "/all", "/norestart"); isMsiError(err) {
-		return errors.Wrap(err, "could not enable WSL Feature")
+		return fmt.Errorf("could not enable WSL Feature: %w", err)
 	}
 
 	if err = runCmdPassThroughTee(log, "dism", "/online", "/enable-feature",
 		"/featurename:VirtualMachinePlatform", "/all", "/norestart"); isMsiError(err) {
-		return errors.Wrap(err, "could not enable Virtual Machine Feature")
+		return fmt.Errorf("could not enable Virtual Machine Feature: %w", err)
 	}
 	log.Close()
 
@@ -687,7 +821,7 @@ func installWslKernel() error {
 	}
 
 	if err != nil {
-		return errors.Wrap(err, "could not install WSL Kernel")
+		return fmt.Errorf("could not install WSL Kernel: %w", err)
 	}
 
 	return nil
@@ -786,6 +920,22 @@ func withUser(s string, user string) string {
 	return strings.ReplaceAll(s, "[USER]", user)
 }
 
+func wslInvoke(dist string, arg ...string) error {
+	newArgs := []string{"-u", "root", "-d", dist}
+	newArgs = append(newArgs, arg...)
+	return runCmdPassThrough("wsl", newArgs...)
+}
+
+func wslPipe(input string, dist string, arg ...string) error {
+	newArgs := []string{"-u", "root", "-d", dist}
+	newArgs = append(newArgs, arg...)
+	return pipeCmdPassThrough("wsl", input, newArgs...)
+}
+
+func wslCreateKeys(sshDir string, name string, dist string) (string, error) {
+	return machine.CreateSSHKeysPrefix(sshDir, name, true, true, "wsl", "-u", "root", "-d", dist)
+}
+
 func runCmdPassThrough(name string, arg ...string) error {
 	logrus.Debugf("Running command: %s %v", name, arg)
 	cmd := exec.Command(name, arg...)
@@ -816,6 +966,26 @@ func pipeCmdPassThrough(name string, input string, arg ...string) error {
 	return cmd.Run()
 }
 
+func setupWslProxyEnv() (hasProxy bool) {
+	current, _ := os.LookupEnv("WSLENV")
+	for _, key := range config.ProxyEnv {
+		if value, _ := os.LookupEnv(key); len(value) < 1 {
+			continue
+		}
+
+		hasProxy = true
+		delim := ""
+		if len(current) > 0 {
+			delim = ":"
+		}
+		current = fmt.Sprintf("%s%s%s/u", current, delim, key)
+	}
+	if hasProxy {
+		os.Setenv("WSLENV", current)
+	}
+	return
+}
+
 func (v *MachineVM) Set(_ string, opts machine.SetOptions) ([]error, error) {
 	// If one setting fails to be applied, the others settings will not fail and still be applied.
 	// The setting(s) that failed to be applied will have its errors returned in setErrors
@@ -824,41 +994,45 @@ func (v *MachineVM) Set(_ string, opts machine.SetOptions) ([]error, error) {
 	if opts.Rootful != nil && v.Rootful != *opts.Rootful {
 		err := v.setRootful(*opts.Rootful)
 		if err != nil {
-			setErrors = append(setErrors, errors.Wrapf(err, "error setting rootful option"))
+			setErrors = append(setErrors, fmt.Errorf("setting rootful option: %w", err))
 		} else {
 			v.Rootful = *opts.Rootful
 		}
 	}
 
 	if opts.CPUs != nil {
-		setErrors = append(setErrors, errors.Errorf("changing CPUs not supported for WSL machines"))
+		setErrors = append(setErrors, errors.New("changing CPUs not supported for WSL machines"))
 	}
 
 	if opts.Memory != nil {
-		setErrors = append(setErrors, errors.Errorf("changing memory not supported for WSL machines"))
+		setErrors = append(setErrors, errors.New("changing memory not supported for WSL machines"))
 
 	}
 
 	if opts.DiskSize != nil {
-		setErrors = append(setErrors, errors.Errorf("changing Disk Size not supported for WSL machines"))
+		setErrors = append(setErrors, errors.New("changing Disk Size not supported for WSL machines"))
 	}
 
 	return setErrors, v.writeConfig()
 }
 
-func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
+func (v *MachineVM) Start(name string, opts machine.StartOptions) error {
 	if v.isRunning() {
-		return errors.Errorf("%q is already running", name)
+		return fmt.Errorf("%q is already running", name)
 	}
 
 	dist := toDist(name)
-
-	err := runCmdPassThrough("wsl", "-d", dist, "/root/bootstrap")
-	if err != nil {
-		return errors.Wrap(err, "WSL bootstrap script failed")
+	useProxy := setupWslProxyEnv()
+	if err := configureProxy(dist, useProxy, opts.Quiet); err != nil {
+		return err
 	}
 
-	if !v.Rootful {
+	err := wslInvoke(dist, "/root/bootstrap")
+	if err != nil {
+		return fmt.Errorf("the WSL bootstrap script failed: %w", err)
+	}
+
+	if !v.Rootful && !opts.NoInfo {
 		fmt.Printf("\nThis machine is currently configured in rootless mode. If your containers\n")
 		fmt.Printf("require root permissions (e.g. ports < 1024), or if you run into compatibility\n")
 		fmt.Printf("issues with non-podman clients, you can switch using the following command: \n")
@@ -871,22 +1045,24 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 	}
 
 	globalName, pipeName, err := launchWinProxy(v)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "API forwarding for Docker API clients is not available due to the following startup failures.")
-		fmt.Fprintf(os.Stderr, "\t%s\n", err.Error())
-		fmt.Fprintln(os.Stderr, "\nPodman clients are still able to connect.")
-	} else {
-		fmt.Printf("API forwarding listening on: %s\n", pipeName)
-		if globalName {
-			fmt.Printf("\nDocker API clients default to this address. You do not need to set DOCKER_HOST.\n")
+	if !opts.NoInfo {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "API forwarding for Docker API clients is not available due to the following startup failures.")
+			fmt.Fprintf(os.Stderr, "\t%s\n", err.Error())
+			fmt.Fprintln(os.Stderr, "\nPodman clients are still able to connect.")
 		} else {
-			fmt.Printf("\nAnother process was listening on the default Docker API pipe address.\n")
-			fmt.Printf("You can still connect Docker API clients by setting DOCKER HOST using the\n")
-			fmt.Printf("following powershell command in your terminal session:\n")
-			fmt.Printf("\n\t$Env:DOCKER_HOST = '%s'\n", pipeName)
-			fmt.Printf("\nOr in a classic CMD prompt:\n")
-			fmt.Printf("\n\tset DOCKER_HOST = '%s'\n", pipeName)
-			fmt.Printf("\nAlternatively terminate the other process and restart podman machine.\n")
+			fmt.Printf("API forwarding listening on: %s\n", pipeName)
+			if globalName {
+				fmt.Printf("\nDocker API clients default to this address. You do not need to set DOCKER_HOST.\n")
+			} else {
+				fmt.Printf("\nAnother process was listening on the default Docker API pipe address.\n")
+				fmt.Printf("You can still connect Docker API clients by setting DOCKER HOST using the\n")
+				fmt.Printf("following powershell command in your terminal session:\n")
+				fmt.Printf("\n\t$Env:DOCKER_HOST = '%s'\n", pipeName)
+				fmt.Printf("\nOr in a classic CMD prompt:\n")
+				fmt.Printf("\n\tset DOCKER_HOST = '%s'\n", pipeName)
+				fmt.Printf("\nAlternatively terminate the other process and restart podman machine.\n")
+			}
 		}
 	}
 
@@ -896,12 +1072,12 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 
 func launchWinProxy(v *MachineVM) (bool, string, error) {
 	machinePipe := toDist(v.Name)
-	if !pipeAvailable(machinePipe) {
-		return false, "", errors.Errorf("could not start api proxy since expected pipe is not available: %s", machinePipe)
+	if !machine.PipeNameAvailable(machinePipe) {
+		return false, "", fmt.Errorf("could not start api proxy since expected pipe is not available: %s", machinePipe)
 	}
 
 	globalName := false
-	if pipeAvailable(globalPipe) {
+	if machine.PipeNameAvailable(globalPipe) {
 		globalName = true
 	}
 
@@ -942,10 +1118,10 @@ func launchWinProxy(v *MachineVM) (bool, string, error) {
 		return globalName, "", err
 	}
 
-	return globalName, pipePrefix + waitPipe, waitPipeExists(waitPipe, 30, func() error {
-		active, exitCode := getProcessState(cmd.Process.Pid)
+	return globalName, pipePrefix + waitPipe, machine.WaitPipeExists(waitPipe, 80, func() error {
+		active, exitCode := machine.GetProcessState(cmd.Process.Pid)
 		if !active {
-			return errors.Errorf("win-sshproxy.exe failed to start, exit code: %d (see windows event logs)", exitCode)
+			return fmt.Errorf("win-sshproxy.exe failed to start, exit code: %d (see windows event logs)", exitCode)
 		}
 
 		return nil
@@ -965,30 +1141,10 @@ func getWinProxyStateDir(v *MachineVM) (string, error) {
 	return stateDir, nil
 }
 
-func pipeAvailable(pipeName string) bool {
-	_, err := os.Stat(`\\.\pipe\` + pipeName)
-	return os.IsNotExist(err)
-}
-
-func waitPipeExists(pipeName string, retries int, checkFailure func() error) error {
-	var err error
-	for i := 0; i < retries; i++ {
-		_, err = os.Stat(`\\.\pipe\` + pipeName)
-		if err == nil {
-			break
-		}
-		if fail := checkFailure(); fail != nil {
-			return fail
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return err
-}
-
-func isWSLInstalled() bool {
-	cmd := exec.Command("wsl", "--status")
+func IsWSLInstalled() bool {
+	cmd := SilentExecCmd("wsl", "--status")
 	out, err := cmd.StdoutPipe()
+	cmd.Stderr = nil
 	if err != nil {
 		return false
 	}
@@ -1012,13 +1168,12 @@ func isWSLInstalled() bool {
 	return true
 }
 
-func isWSLFeatureEnabled() bool {
-	cmd := exec.Command("wsl", "--set-default-version", "2")
-	return cmd.Run() == nil
+func IsWSLFeatureEnabled() bool {
+	return SilentExec("wsl", "--set-default-version", "2") == nil
 }
 
 func isWSLRunning(dist string) (bool, error) {
-	cmd := exec.Command("wsl", "-l", "--running")
+	cmd := exec.Command("wsl", "-l", "--running", "--quiet")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return false, err
@@ -1042,7 +1197,7 @@ func isWSLRunning(dist string) (bool, error) {
 }
 
 func isSystemdRunning(dist string) (bool, error) {
-	cmd := exec.Command("wsl", "-d", dist, "sh")
+	cmd := exec.Command("wsl", "-u", "root", "-d", dist, "sh")
 	cmd.Stdin = strings.NewReader(sysdpid + "\necho $SYSDPID\n")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1083,7 +1238,7 @@ func (v *MachineVM) Stop(name string, _ machine.StopOptions) error {
 	}
 
 	if !wsl || !sysd {
-		return errors.Errorf("%q is not running", v.Name)
+		return fmt.Errorf("%q is not running", v.Name)
 	}
 
 	_, _, _ = v.updateTimeStamps(true)
@@ -1092,27 +1247,27 @@ func (v *MachineVM) Stop(name string, _ machine.StopOptions) error {
 		fmt.Fprintf(os.Stderr, "Could not stop API forwarding service (win-sshproxy.exe): %s\n", err.Error())
 	}
 
-	cmd := exec.Command("wsl", "-d", dist, "sh")
+	cmd := exec.Command("wsl", "-u", "root", "-d", dist, "sh")
 	cmd.Stdin = strings.NewReader(waitTerm)
 	if err = cmd.Start(); err != nil {
-		return errors.Wrap(err, "Error executing wait command")
+		return fmt.Errorf("executing wait command: %w", err)
 	}
 
-	exitCmd := exec.Command("wsl", "-d", dist, "/usr/local/bin/enterns", "systemctl", "exit", "0")
+	exitCmd := exec.Command("wsl", "-u", "root", "-d", dist, "/usr/local/bin/enterns", "systemctl", "exit", "0")
 	if err = exitCmd.Run(); err != nil {
-		return errors.Wrap(err, "Error stopping sysd")
+		return fmt.Errorf("stopping sysd: %w", err)
 	}
 
 	if err = cmd.Wait(); err != nil {
 		return err
 	}
 
-	cmd = exec.Command("wsl", "--terminate", dist)
-	if err = cmd.Run(); err != nil {
-		return err
-	}
+	return terminateDist(dist)
+}
 
-	return nil
+func terminateDist(dist string) error {
+	cmd := exec.Command("wsl", "--terminate", dist)
+	return cmd.Run()
 }
 
 func (v *MachineVM) State(bypass bool) (machine.Status, error) {
@@ -1166,7 +1321,7 @@ func readWinProxyTid(v *MachineVM) (uint32, uint32, string, error) {
 	}
 
 	tidFile := filepath.Join(stateDir, winSshProxyTid)
-	contents, err := ioutil.ReadFile(tidFile)
+	contents, err := os.ReadFile(tidFile)
 	if err != nil {
 		return 0, 0, "", err
 	}
@@ -1181,7 +1336,7 @@ func (v *MachineVM) Remove(name string, opts machine.RemoveOptions) (string, fun
 	var files []string
 
 	if v.isRunning() {
-		return "", nil, errors.Errorf("running vm %q cannot be destroyed", v.Name)
+		return "", nil, fmt.Errorf("running vm %q cannot be destroyed", v.Name)
 	}
 
 	// Collect all the files that need to be destroyed
@@ -1221,7 +1376,7 @@ func (v *MachineVM) Remove(name string, opts machine.RemoveOptions) (string, fun
 			logrus.Error(err)
 		}
 		for _, f := range files {
-			if err := os.RemoveAll(f); err != nil {
+			if err := machine.GuardedRemoveAll(f); err != nil {
 				logrus.Error(err)
 			}
 		}
@@ -1253,7 +1408,7 @@ func (v *MachineVM) isRunning() bool {
 // Added ssh function to VM interface: pkg/machine/config/go : line 58
 func (v *MachineVM) SSH(name string, opts machine.SSHOptions) error {
 	if !v.isRunning() {
-		return errors.Errorf("vm %q is not running.", v.Name)
+		return fmt.Errorf("vm %q is not running.", v.Name)
 	}
 
 	username := opts.Username
@@ -1282,7 +1437,7 @@ func (v *MachineVM) SSH(name string, opts machine.SSHOptions) error {
 }
 
 // List lists all vm's that use qemu virtualization
-func (p *Provider) List(_ machine.ListOptions) ([]*machine.ListResponse, error) {
+func (p *Virtualization) List(_ machine.ListOptions) ([]*machine.ListResponse, error) {
 	return GetVMInfos()
 }
 
@@ -1312,6 +1467,7 @@ func GetVMInfos() ([]*machine.ListResponse, error) {
 			listEntry.RemoteUsername = vm.RemoteUsername
 			listEntry.Port = vm.Port
 			listEntry.IdentityPath = vm.IdentityPath
+			listEntry.Starting = false
 
 			running := vm.isRunning()
 			listEntry.CreatedAt, listEntry.LastUp, _ = vm.updateTimeStamps(running)
@@ -1355,7 +1511,7 @@ func getCPUs(vm *MachineVM) (uint64, error) {
 	if run, _ := isWSLRunning(dist); !run {
 		return 0, nil
 	}
-	cmd := exec.Command("wsl", "-d", dist, "nproc")
+	cmd := exec.Command("wsl", "-u", "root", "-d", dist, "nproc")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -1379,7 +1535,7 @@ func getMem(vm *MachineVM) (uint64, error) {
 	if run, _ := isWSLRunning(dist); !run {
 		return 0, nil
 	}
-	cmd := exec.Command("wsl", "-d", dist, "cat", "/proc/meminfo")
+	cmd := exec.Command("wsl", "-u", "root", "-d", dist, "cat", "/proc/meminfo")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -1410,7 +1566,7 @@ func getMem(vm *MachineVM) (uint64, error) {
 	return total - available, err
 }
 
-func (p *Provider) IsValidVMName(name string) (bool, error) {
+func (p *Virtualization) IsValidVMName(name string) (bool, error) {
 	infos, err := GetVMInfos()
 	if err != nil {
 		return false, err
@@ -1423,7 +1579,7 @@ func (p *Provider) IsValidVMName(name string) (bool, error) {
 	return false, nil
 }
 
-func (p *Provider) CheckExclusiveActiveVM() (bool, string, error) {
+func (p *Virtualization) CheckExclusiveActiveVM() (bool, string, error) {
 	return false, "", nil
 }
 
@@ -1453,11 +1609,15 @@ func (v *MachineVM) Inspect() (*machine.InspectInfo, error) {
 		return nil, err
 	}
 
-	created, lastUp, _ := v.updateTimeStamps(state == machine.Running)
+	connInfo := new(machine.ConnectionConfig)
+	machinePipe := toDist(v.Name)
+	connInfo.PodmanPipe = &machine.VMFile{Path: `\\.\pipe\` + machinePipe}
 
+	created, lastUp, _ := v.updateTimeStamps(state == machine.Running)
 	return &machine.InspectInfo{
-		ConfigPath: machine.VMFile{Path: v.ConfigPath},
-		Created:    created,
+		ConfigPath:     machine.VMFile{Path: v.ConfigPath},
+		ConnectionInfo: *connInfo,
+		Created:        created,
 		Image: machine.ImageConfig{
 			ImagePath:   machine.VMFile{Path: v.ImagePath},
 			ImageStream: v.ImageStream,
@@ -1478,7 +1638,7 @@ func (v *MachineVM) getResources() (resources machine.ResourceConfig) {
 }
 
 // RemoveAndCleanMachines removes all machine and cleans up any other files associated with podman machine
-func (p *Provider) RemoveAndCleanMachines() error {
+func (p *Virtualization) RemoveAndCleanMachines() error {
 	var (
 		vm             machine.VM
 		listResponse   []*machine.ListResponse
@@ -1525,7 +1685,7 @@ func (p *Provider) RemoveAndCleanMachines() error {
 		}
 		prevErr = err
 	} else {
-		err := os.RemoveAll(dataDir)
+		err := machine.GuardedRemoveAll(dataDir)
 		if err != nil {
 			if prevErr != nil {
 				logrus.Error(prevErr)
@@ -1542,7 +1702,7 @@ func (p *Provider) RemoveAndCleanMachines() error {
 		}
 		prevErr = err
 	} else {
-		err := os.RemoveAll(confDir)
+		err := machine.GuardedRemoveAll(confDir)
 		if err != nil {
 			if prevErr != nil {
 				logrus.Error(prevErr)
@@ -1551,4 +1711,8 @@ func (p *Provider) RemoveAndCleanMachines() error {
 		}
 	}
 	return prevErr
+}
+
+func (p *Virtualization) VMType() string {
+	return vmtype
 }

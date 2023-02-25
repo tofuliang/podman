@@ -7,25 +7,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSetPodExitPolicy(t *testing.T) {
+func TestHasPodExitPolicy(t *testing.T) {
 	tests := []struct {
-		input, expected []string
+		input    []string
+		expected bool
 	}{
 		{
 			[]string{"podman", "pod", "create"},
-			[]string{"podman", "pod", "create", "--exit-policy=stop"},
+			false,
 		},
 		{
 			[]string{"podman", "pod", "create", "--exit-policy=continue"},
-			[]string{"podman", "pod", "create", "--exit-policy=continue"},
+			true,
 		},
 		{
 			[]string{"podman", "pod", "create", "--exit-policy", "continue"},
-			[]string{"podman", "pod", "create", "--exit-policy", "continue"},
+			true,
 		},
 	}
 	for _, test := range tests {
-		assert.Equalf(t, test.expected, setPodExitPolicy(test.input), "%v", test.input)
+		assert.Equalf(t, test.expected, hasPodExitPolicy(test.input), "%v", test.input)
 	}
 }
 
@@ -70,7 +71,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
@@ -78,8 +79,10 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -98,7 +101,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
@@ -106,8 +109,10 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -124,7 +129,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 # User-defined dependencies
@@ -135,8 +140,10 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -152,7 +159,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 # User-defined dependencies
@@ -163,8 +170,10 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -180,7 +189,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 # User-defined dependencies
@@ -191,8 +200,10 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -208,7 +219,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 # User-defined dependencies
@@ -221,9 +232,47 @@ Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
+Type=forking
+
+[Install]
+WantedBy=default.target
+`
+	podNoExplicitName := `# pod-123abc.service
+# autogenerated by Podman CI
+
+[Unit]
+Description=Podman pod-123abc.service
+Documentation=man:podman-generate-systemd(1)
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/var/run/containers/storage
+Wants=
+Before=
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+Restart=on-failure
+TimeoutStopSec=70
+ExecStartPre=/usr/bin/podman pod create \
+	--infra-conmon-pidfile %t/pod-123abc.pid \
+	--pod-id-file %t/pod-123abc.pod-id \
+	--exit-policy=stop foo
+ExecStart=/usr/bin/podman pod start \
+	--pod-id-file %t/pod-123abc.pod-id
+ExecStop=/usr/bin/podman pod stop \
+	--ignore \
+	--pod-id-file %t/pod-123abc.pod-id  \
+	-t 10
+ExecStopPost=/usr/bin/podman pod rm \
+	--ignore \
+	-f \
+	--pod-id-file %t/pod-123abc.pod-id
+PIDFile=%t/pod-123abc.pid
 Type=forking
 
 [Install]
@@ -239,7 +288,7 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
@@ -248,8 +297,10 @@ Restart=on-failure
 RestartSec=15
 TimeoutStopSec=102
 ExecStart=/usr/bin/podman start jadda-jadda-infra
-ExecStop=/usr/bin/podman stop -t 42 jadda-jadda-infra
-ExecStopPost=/usr/bin/podman stop -t 42 jadda-jadda-infra
+ExecStop=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
+ExecStopPost=/usr/bin/podman stop  \
+	-t 42 jadda-jadda-infra
 PIDFile=/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid
 Type=forking
 
@@ -266,18 +317,29 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=70
-ExecStartPre=/bin/rm -f %t/pod-123abc.pid %t/pod-123abc.pod-id
-ExecStartPre=/usr/bin/podman pod create --infra-conmon-pidfile %t/pod-123abc.pid --pod-id-file %t/pod-123abc.pod-id --name foo "bar=arg with space" --replace --exit-policy=stop
-ExecStart=/usr/bin/podman pod start --pod-id-file %t/pod-123abc.pod-id
-ExecStop=/usr/bin/podman pod stop --ignore --pod-id-file %t/pod-123abc.pod-id -t 10
-ExecStopPost=/usr/bin/podman pod rm --ignore -f --pod-id-file %t/pod-123abc.pod-id
+ExecStartPre=/usr/bin/podman pod create \
+	--infra-conmon-pidfile %t/pod-123abc.pid \
+	--pod-id-file %t/pod-123abc.pod-id \
+	--exit-policy=stop \
+	--name foo "bar=arg with space" \
+	--replace
+ExecStart=/usr/bin/podman pod start \
+	--pod-id-file %t/pod-123abc.pod-id
+ExecStop=/usr/bin/podman pod stop \
+	--ignore \
+	--pod-id-file %t/pod-123abc.pod-id  \
+	-t 10
+ExecStopPost=/usr/bin/podman pod rm \
+	--ignore \
+	-f \
+	--pod-id-file %t/pod-123abc.pod-id
 PIDFile=%t/pod-123abc.pid
 Type=forking
 
@@ -294,18 +356,31 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=70
-ExecStartPre=/bin/rm -f %t/pod-123abc.pid %t/pod-123abc.pod-id
-ExecStartPre=/usr/bin/podman --events-backend none --runroot /root pod create --infra-conmon-pidfile %t/pod-123abc.pid --pod-id-file %t/pod-123abc.pod-id --name foo "bar=arg with space" --replace --exit-policy=stop
-ExecStart=/usr/bin/podman --events-backend none --runroot /root pod start --pod-id-file %t/pod-123abc.pod-id
-ExecStop=/usr/bin/podman --events-backend none --runroot /root pod stop --ignore --pod-id-file %t/pod-123abc.pod-id -t 10
-ExecStopPost=/usr/bin/podman --events-backend none --runroot /root pod rm --ignore -f --pod-id-file %t/pod-123abc.pod-id
+ExecStartPre=/usr/bin/podman \
+	--events-backend none \
+	--runroot /root pod create \
+	--infra-conmon-pidfile %t/pod-123abc.pid \
+	--pod-id-file %t/pod-123abc.pod-id \
+	--exit-policy=stop \
+	--name foo "bar=arg with space" \
+	--replace
+ExecStart=/usr/bin/podman --events-backend none --runroot /root pod start \
+	--pod-id-file %t/pod-123abc.pod-id
+ExecStop=/usr/bin/podman --events-backend none --runroot /root pod stop \
+	--ignore \
+	--pod-id-file %t/pod-123abc.pod-id  \
+	-t 10
+ExecStopPost=/usr/bin/podman --events-backend none --runroot /root pod rm \
+	--ignore \
+	-f \
+	--pod-id-file %t/pod-123abc.pod-id
 PIDFile=%t/pod-123abc.pid
 Type=forking
 
@@ -322,18 +397,29 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=70
-ExecStartPre=/bin/rm -f %t/pod-123abc.pid %t/pod-123abc.pod-id
-ExecStartPre=/usr/bin/podman pod create --infra-conmon-pidfile %t/pod-123abc.pid --pod-id-file %t/pod-123abc.pod-id --name foo --replace --exit-policy=stop
-ExecStart=/usr/bin/podman pod start --pod-id-file %t/pod-123abc.pod-id
-ExecStop=/usr/bin/podman pod stop --ignore --pod-id-file %t/pod-123abc.pod-id -t 10
-ExecStopPost=/usr/bin/podman pod rm --ignore -f --pod-id-file %t/pod-123abc.pod-id
+ExecStartPre=/usr/bin/podman pod create \
+	--infra-conmon-pidfile %t/pod-123abc.pid \
+	--pod-id-file %t/pod-123abc.pod-id \
+	--exit-policy=stop \
+	--name foo \
+	--replace
+ExecStart=/usr/bin/podman pod start \
+	--pod-id-file %t/pod-123abc.pod-id
+ExecStop=/usr/bin/podman pod stop \
+	--ignore \
+	--pod-id-file %t/pod-123abc.pod-id  \
+	-t 10
+ExecStopPost=/usr/bin/podman pod rm \
+	--ignore \
+	-f \
+	--pod-id-file %t/pod-123abc.pod-id
 PIDFile=%t/pod-123abc.pid
 Type=forking
 
@@ -350,18 +436,30 @@ Documentation=man:podman-generate-systemd(1)
 Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/run/containers/storage
-Requires=container-1.service container-2.service
+Wants=container-1.service container-2.service
 Before=container-1.service container-2.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
 Restart=on-failure
 TimeoutStopSec=70
-ExecStartPre=/bin/rm -f %t/pod-123abc.pid %t/pod-123abc.pod-id
-ExecStartPre=/usr/bin/podman pod create --infra-conmon-pidfile %t/pod-123abc.pid --pod-id-file %t/pod-123abc.pod-id --name foo --label key={{someval}} --exit-policy=continue --replace
-ExecStart=/usr/bin/podman pod start --pod-id-file %t/pod-123abc.pod-id
-ExecStop=/usr/bin/podman pod stop --ignore --pod-id-file %t/pod-123abc.pod-id -t 10
-ExecStopPost=/usr/bin/podman pod rm --ignore -f --pod-id-file %t/pod-123abc.pod-id
+ExecStartPre=/usr/bin/podman pod create \
+	--infra-conmon-pidfile %t/pod-123abc.pid \
+	--pod-id-file %t/pod-123abc.pod-id \
+	--name foo \
+	--label key={{someval}} \
+	--exit-policy=continue \
+	--replace
+ExecStart=/usr/bin/podman pod start \
+	--pod-id-file %t/pod-123abc.pod-id
+ExecStop=/usr/bin/podman pod stop \
+	--ignore \
+	--pod-id-file %t/pod-123abc.pod-id  \
+	-t 10
+ExecStopPost=/usr/bin/podman pod rm \
+	--ignore \
+	-f \
+	--pod-id-file %t/pod-123abc.pod-id
 PIDFile=%t/pod-123abc.pid
 Type=forking
 
@@ -480,6 +578,23 @@ WantedBy=default.target
 			},
 			podGoodCustomDependencies,
 			false,
+			false,
+			false,
+		},
+		{"pod without --name",
+			podInfo{
+				Executable:    "/usr/bin/podman",
+				ServiceName:   "pod-123abc",
+				InfraNameOrID: "jadda-jadda-infra",
+				PIDFile:       "/run/containers/storage/overlay-containers/639c53578af4d84b8800b4635fa4e680ee80fd67e0e6a2d4eea48d1e3230f401/userdata/conmon.pid",
+				StopTimeout:   10,
+				PodmanVersion: "CI",
+				GraphRoot:     "/var/lib/containers/storage",
+				RunRoot:       "/var/run/containers/storage",
+				CreateCommand: []string{"podman", "pod", "create", "foo"},
+			},
+			podNoExplicitName,
+			true,
 			false,
 			false,
 		},

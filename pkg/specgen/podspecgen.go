@@ -4,6 +4,7 @@ import (
 	"net"
 
 	"github.com/containers/common/libnetwork/types"
+	storageTypes "github.com/containers/storage/types"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -52,6 +53,9 @@ type PodBasicConfig struct {
 	// Conflicts with NoInfra=true.
 	// Optional.
 	InfraName string `json:"infra_name,omitempty"`
+	// Ipc sets the IPC namespace of the pod, set to private by default.
+	// This configuration will then be shared with the entire pod if PID namespace sharing is enabled via --share
+	Ipc Namespace `json:"ipcns,omitempty"`
 	// SharedNamespaces instructs the pod to share a set of namespaces.
 	// Shared namespaces will be joined (by default) by every container
 	// which joins the pod.
@@ -76,6 +80,8 @@ type PodBasicConfig struct {
 	// Any containers created within the pod will inherit the pod's userns settings.
 	// Optional
 	Userns Namespace `json:"userns,omitempty"`
+	// UtsNs is used to indicate the UTS mode the pod is in
+	UtsNs Namespace `json:"utsns,omitempty"`
 	// Devices contains user specified Devices to be added to the Pod
 	Devices []string `json:"pod_devices,omitempty"`
 	// Sysctl sets kernel parameters for the pod
@@ -95,7 +101,7 @@ type PodNetworkConfig struct {
 	// PortMappings is a set of ports to map into the infra container.
 	// As, by default, containers share their network with the infra
 	// container, this will forward the ports to the entire pod.
-	// Only available if NetNS is set to Bridge or Slirp.
+	// Only available if NetNS is set to Bridge, Slirp, or Pasta.
 	// Optional.
 	PortMappings []types.PortMapping `json:"portmappings,omitempty"`
 	// Map of networks names to ids the container should join to.
@@ -182,6 +188,14 @@ type PodStorageConfig struct {
 	// comma-separated options. Valid options are 'ro', 'rw', and 'z'.
 	// Options will be used for all volumes sourced from the container.
 	VolumesFrom []string `json:"volumes_from,omitempty"`
+	// ShmSize is the size of the tmpfs to mount in at /dev/shm, in bytes.
+	// Conflicts with ShmSize if IpcNS is not private.
+	// Optional.
+	ShmSize *int64 `json:"shm_size,omitempty"`
+	// ShmSizeSystemd is the size of systemd-specific tmpfs mounts
+	// specifically /run, /run/lock, /var/log/journal and /tmp.
+	// Optional
+	ShmSizeSystemd *int64 `json:"shm_size_systemd,omitempty"`
 }
 
 // PodCgroupConfig contains configuration options about a pod's cgroups.
@@ -222,6 +236,10 @@ type PodResourceConfig struct {
 
 type PodSecurityConfig struct {
 	SecurityOpt []string `json:"security_opt,omitempty"`
+	// IDMappings are UID and GID mappings that will be used by user
+	// namespaces.
+	// Required if UserNS is private.
+	IDMappings *storageTypes.IDMappingOptions `json:"idmappings,omitempty"`
 }
 
 // NewPodSpecGenerator creates a new pod spec

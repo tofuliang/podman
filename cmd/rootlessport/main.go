@@ -6,9 +6,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -18,7 +18,6 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/podman/v4/pkg/rootlessport"
-	"github.com/pkg/errors"
 	rkport "github.com/rootless-containers/rootlesskit/pkg/port"
 	rkbuiltin "github.com/rootless-containers/rootlesskit/pkg/port/builtin"
 	rkportutil "github.com/rootless-containers/rootlesskit/pkg/port/portutil"
@@ -50,7 +49,7 @@ func main() {
 }
 
 func loadConfig(r io.Reader) (*rootlessport.Config, io.ReadCloser, io.WriteCloser, error) {
-	stdin, err := ioutil.ReadAll(r)
+	stdin, err := io.ReadAll(r)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -92,7 +91,7 @@ func parent() error {
 	}
 
 	// create the parent driver
-	stateDir, err := ioutil.TempDir(cfg.TmpDir, "rootlessport")
+	stateDir, err := os.MkdirTemp(cfg.TmpDir, "rootlessport")
 	if err != nil {
 		return err
 	}
@@ -225,9 +224,9 @@ outer:
 
 	// https://github.com/containers/podman/issues/11248
 	// Copy /dev/null to stdout and stderr to prevent SIGPIPE errors
-	if f, err := os.OpenFile("/dev/null", os.O_WRONLY, 0755); err == nil {
-		unix.Dup2(int(f.Fd()), 1) // nolint:errcheck
-		unix.Dup2(int(f.Fd()), 2) // nolint:errcheck
+	if f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0755); err == nil {
+		unix.Dup2(int(f.Fd()), 1) //nolint:errcheck
+		unix.Dup2(int(f.Fd()), 2) //nolint:errcheck
 		f.Close()
 	}
 	// write and close ReadyFD (convention is same as slirp4netns --ready-fd)
@@ -240,7 +239,7 @@ outer:
 
 	// wait for ExitFD to be closed
 	logrus.Info("Waiting for exitfd to be closed")
-	if _, err := ioutil.ReadAll(exitR); err != nil {
+	if _, err := io.ReadAll(exitR); err != nil {
 		return err
 	}
 	return nil
@@ -269,16 +268,16 @@ func handler(ctx context.Context, conn io.Reader, pm rkport.Manager) error {
 	dec := json.NewDecoder(conn)
 	err := dec.Decode(&childIP)
 	if err != nil {
-		return errors.Wrap(err, "rootless port failed to decode ports")
+		return fmt.Errorf("rootless port failed to decode ports: %w", err)
 	}
 	portStatus, err := pm.ListPorts(ctx)
 	if err != nil {
-		return errors.Wrap(err, "rootless port failed to list ports")
+		return fmt.Errorf("rootless port failed to list ports: %w", err)
 	}
 	for _, status := range portStatus {
 		err = pm.RemovePort(ctx, status.ID)
 		if err != nil {
-			return errors.Wrap(err, "rootless port failed to remove port")
+			return fmt.Errorf("rootless port failed to remove port: %w", err)
 		}
 	}
 	// add the ports with the new child IP
@@ -287,7 +286,7 @@ func handler(ctx context.Context, conn io.Reader, pm rkport.Manager) error {
 		status.Spec.ChildIP = childIP
 		_, err = pm.AddPort(ctx, status.Spec)
 		if err != nil {
-			return errors.Wrap(err, "rootless port failed to add port")
+			return fmt.Errorf("rootless port failed to add port: %w", err)
 		}
 	}
 	return nil
@@ -357,7 +356,7 @@ func child() error {
 	}()
 
 	// wait for stdin to be closed
-	if _, err := ioutil.ReadAll(os.Stdin); err != nil {
+	if _, err := io.ReadAll(os.Stdin); err != nil {
 		return err
 	}
 	return nil

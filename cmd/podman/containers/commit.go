@@ -3,7 +3,6 @@ package containers
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -95,7 +93,7 @@ func init() {
 }
 
 func commit(cmd *cobra.Command, args []string) error {
-	container := args[0]
+	container := strings.TrimPrefix(args[0], "/")
 	if len(args) == 2 {
 		commitOptions.ImageName = args[1]
 	}
@@ -108,8 +106,8 @@ func commit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if len(iidFile) > 0 {
-		if err = ioutil.WriteFile(iidFile, []byte(response.Id), 0644); err != nil {
-			return errors.Wrap(err, "failed to write image ID")
+		if err = os.WriteFile(iidFile, []byte(response.Id), 0644); err != nil {
+			return fmt.Errorf("failed to write image ID: %w", err)
 		}
 	}
 	fmt.Println(response.Id)

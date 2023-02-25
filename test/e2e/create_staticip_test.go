@@ -4,7 +4,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/containers/podman/v4/pkg/rootless"
 	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -25,7 +24,7 @@ var _ = Describe("Podman create with --ip flag", func() {
 		}
 		podmanTest = PodmanTestCreate(tempdir)
 		podmanTest.Setup()
-		// Cleanup the CNI networks used by the tests
+		// Clean up the CNI networks used by the tests
 		os.RemoveAll("/var/lib/cni/networks/podman")
 	})
 
@@ -54,22 +53,16 @@ var _ = Describe("Podman create with --ip flag", func() {
 	})
 
 	It("Podman create with specified static IP has correct IP", func() {
-		// NOTE: we force the k8s-file log driver to make sure the
-		// tests are passing inside a container.
 		ip := GetRandomIPAddress()
-		result := podmanTest.Podman([]string{"create", "--log-driver", "k8s-file", "--name", "test", "--ip", ip, ALPINE, "ip", "addr"})
+		result := podmanTest.Podman([]string{"create", "--name", "test", "--ip", ip, ALPINE, "ip", "addr"})
 		result.WaitWithDefaultTimeout()
 		// Rootless static ip assignment without network should error
-		if rootless.IsRootless() {
+		if isRootless() {
 			Expect(result).Should(Exit(125))
 		} else {
 			Expect(result).Should(Exit(0))
 
-			result = podmanTest.Podman([]string{"start", "test"})
-			result.WaitWithDefaultTimeout()
-			Expect(result).Should(Exit(0))
-
-			result = podmanTest.Podman([]string{"logs", "test"})
+			result = podmanTest.Podman([]string{"start", "-a", "test"})
 			result.WaitWithDefaultTimeout()
 			Expect(result).Should(Exit(0))
 			Expect(result.OutputToString()).To(ContainSubstring(ip + "/16"))

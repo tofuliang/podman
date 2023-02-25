@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"io/ioutil"
 	"os"
 
 	. "github.com/containers/podman/v4/test/utils"
@@ -26,7 +25,7 @@ var _ = Describe("Podman run cpu", func() {
 		}
 
 		if CGROUPSV2 {
-			if err := ioutil.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpuset"), 0644); err != nil {
+			if err := os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpuset"), 0644); err != nil {
 				Skip("cpuset controller not available on the current kernel")
 			}
 		}
@@ -94,7 +93,7 @@ var _ = Describe("Podman run cpu", func() {
 			Expect(result).Should(Exit(0))
 			Expect(result.OutputToString()).To(Equal("10000"))
 		} else {
-			result := podmanTest.Podman([]string{"run", "--rm", "--cpu-shares=2", ALPINE, "cat", "/sys/fs/cgroup/cpu/cpu.shares"})
+			result := podmanTest.Podman([]string{"run", "--rm", "-c", "2", ALPINE, "cat", "/sys/fs/cgroup/cpu/cpu.shares"})
 			result.WaitWithDefaultTimeout()
 			Expect(result).Should(Exit(0))
 			Expect(result.OutputToString()).To(Equal("2"))
@@ -137,5 +136,21 @@ var _ = Describe("Podman run cpu", func() {
 		result := podmanTest.Podman([]string{"run", "--rm", "--cpu-quota=5000", "--cpus=0.5", ALPINE, "ls"})
 		result.WaitWithDefaultTimeout()
 		Expect(result).To(ExitWithError())
+	})
+
+	It("podman run invalid cpu-rt-period with cgroupsv2", func() {
+		SkipIfCgroupV1("testing options that only work in cgroup v2")
+		result := podmanTest.Podman([]string{"run", "--rm", "--cpu-rt-period=5000", ALPINE, "ls"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(result.ErrorToString()).To(ContainSubstring("Realtime period not supported on cgroups V2 systems"))
+	})
+
+	It("podman run invalid cpu-rt-runtime with cgroupsv2", func() {
+		SkipIfCgroupV1("testing options that only work in cgroup v2")
+		result := podmanTest.Podman([]string{"run", "--rm", "--cpu-rt-runtime=5000", ALPINE, "ls"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(result.ErrorToString()).To(ContainSubstring("Realtime runtime not supported on cgroups V2 systems"))
 	})
 })

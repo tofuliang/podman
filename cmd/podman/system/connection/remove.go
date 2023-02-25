@@ -1,11 +1,12 @@
 package connection
 
 import (
+	"errors"
+
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/system"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -30,11 +31,19 @@ var (
 func init() {
 	registry.Commands = append(registry.Commands, registry.CliCommand{
 		Command: rmCmd,
+		Parent:  system.ContextCmd,
+	})
+
+	registry.Commands = append(registry.Commands, registry.CliCommand{
+		Command: rmCmd,
 		Parent:  system.ConnectionCmd,
 	})
 
 	flags := rmCmd.Flags()
 	flags.BoolVarP(&rmOpts.All, "all", "a", false, "Remove all connections")
+
+	flags.BoolP("force", "f", false, "Ignored: for Docker compatibility")
+	_ = flags.MarkHidden("force")
 }
 
 func rm(cmd *cobra.Command, args []string) error {

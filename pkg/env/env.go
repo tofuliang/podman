@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 const whiteSpaces = " \t"
@@ -39,6 +37,22 @@ func Slice(m map[string]string) []string {
 	return env
 }
 
+// Map transforms the specified slice of environment variables into a
+// map.
+func Map(slice []string) map[string]string {
+	envmap := make(map[string]string, len(slice))
+	for _, val := range slice {
+		data := strings.SplitN(val, "=", 2)
+
+		if len(data) > 1 {
+			envmap[data[0]] = data[1]
+		} else {
+			envmap[data[0]] = ""
+		}
+	}
+	return envmap
+}
+
 // Join joins the two environment maps with override overriding base.
 func Join(base map[string]string, override map[string]string) map[string]string {
 	if len(base) == 0 {
@@ -56,7 +70,7 @@ func ParseFile(path string) (_ map[string]string, err error) {
 	env := make(map[string]string)
 	defer func() {
 		if err != nil {
-			err = errors.Wrapf(err, "error parsing env file %q", path)
+			err = fmt.Errorf("parsing env file %q: %w", path, err)
 		}
 	}()
 
@@ -85,14 +99,10 @@ func parseEnv(env map[string]string, line string) error {
 
 	// catch invalid variables such as "=" or "=A"
 	if data[0] == "" {
-		return errors.Errorf("invalid environment variable: %q", line)
+		return fmt.Errorf("invalid environment variable: %q", line)
 	}
 	// trim the front of a variable, but nothing else
 	name := strings.TrimLeft(data[0], whiteSpaces)
-	if strings.ContainsAny(name, whiteSpaces) {
-		return errors.Errorf("name %q has white spaces, poorly formatted name", name)
-	}
-
 	if len(data) > 1 {
 		env[name] = data[1]
 	} else {

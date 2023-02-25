@@ -59,6 +59,22 @@ load helpers
     is "${lines[3]}" "c4--Created.*" "ps -a, created container (unaffected)"
 }
 
+@test "podman stop print IDs or raw input" {
+    # stop -a must print the IDs
+    run_podman run -d $IMAGE top
+    ctrID="$output"
+    run_podman stop --all
+    is "$output" "$ctrID"
+
+    # stop $input must print $input
+    cname=$(random_string)
+    run_podman run -d --name $cname $IMAGE top
+    run_podman stop $cname
+    is "$output" $cname
+
+    run_podman rm -t 0 -f $ctrID $cname
+}
+
 # #9051 : podman stop --ignore was not working with podman-remote
 @test "podman stop --ignore" {
     name=thiscontainerdoesnotexist
@@ -170,5 +186,20 @@ load helpers
     run_podman run --rm --name stopme -d $IMAGE top
     run_podman --noout stop -t 0 stopme
     is "$output" "" "output should be empty"
+}
+
+@test "podman stop, with --rm container" {
+    OCIDir=/run/$(podman_runtime)
+
+    if is_rootless; then
+        OCIDir=/run/user/$(id -u)/$(podman_runtime)
+    fi
+
+    run_podman run --rm -d --name rmstop $IMAGE sleep infinity
+    local cid="$output"
+    run_podman stop rmstop
+
+    # Check the OCI runtime directory has removed.
+    is "$(ls $OCIDir | grep $cid)" "" "The OCI runtime directory should have been removed"
 }
 # vim: filetype=sh

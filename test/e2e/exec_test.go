@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -454,7 +453,7 @@ var _ = Describe("Podman exec", func() {
 		Expect(setup).Should(Exit(0))
 
 		devNull, err := os.Open("/dev/null")
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		defer devNull.Close()
 		files := []*os.File{
 			devNull,
@@ -545,8 +544,8 @@ RUN useradd -u 1000 auser`, fedoraMinimal)
 	It("podman exec with env var secret", func() {
 		secretsString := "somesecretdata"
 		secretFilePath := filepath.Join(podmanTest.TempDir, "secret")
-		err := ioutil.WriteFile(secretFilePath, []byte(secretsString), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(secretFilePath, []byte(secretsString), 0755)
+		Expect(err).ToNot(HaveOccurred())
 
 		session := podmanTest.Podman([]string{"secret", "create", "mysecret", secretFilePath})
 		session.WaitWithDefaultTimeout()

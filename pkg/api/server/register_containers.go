@@ -11,9 +11,9 @@ import (
 func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	// swagger:operation POST /containers/create compat ContainerCreate
 	// ---
-	//   summary: Create a container
 	//   tags:
 	//    - containers (compat)
+	//   summary: Create a container
 	//   produces:
 	//   - application/json
 	//   parameters:
@@ -212,7 +212,6 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: signal
 	//    type: string
-	//    default: TERM
 	//    description: signal to be sent to container
 	//    default: SIGKILL
 	// produces:
@@ -397,9 +396,9 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//     $ref: "#/responses/containerNotFound"
 	//   500:
 	//     $ref: "#/responses/internalError"
-	r.HandleFunc(VersionedPath("/containers/{name}/stats"), s.APIHandler(compat.StatsContainer)).Methods(http.MethodGet)
+	r.HandleFunc(VersionedPath("/containers/{name}/stats"), s.StreamBufferedAPIHandler(compat.StatsContainer)).Methods(http.MethodGet)
 	// Added non version path to URI to support docker non versioned paths
-	r.HandleFunc("/containers/{name}/stats", s.APIHandler(compat.StatsContainer)).Methods(http.MethodGet)
+	r.HandleFunc("/containers/{name}/stats", s.StreamBufferedAPIHandler(compat.StatsContainer)).Methods(http.MethodGet)
 	// swagger:operation POST /containers/{name}/stop compat ContainerStop
 	// ---
 	// tags:
@@ -455,9 +454,9 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//     $ref: "#/responses/containerNotFound"
 	//   500:
 	//     $ref: "#/responses/internalError"
-	r.HandleFunc(VersionedPath("/containers/{name}/top"), s.APIHandler(compat.TopContainer)).Methods(http.MethodGet)
+	r.HandleFunc(VersionedPath("/containers/{name}/top"), s.StreamBufferedAPIHandler(compat.TopContainer)).Methods(http.MethodGet)
 	// Added non version path to URI to support docker non versioned paths
-	r.HandleFunc("/containers/{name}/top", s.APIHandler(compat.TopContainer)).Methods(http.MethodGet)
+	r.HandleFunc("/containers/{name}/top", s.StreamBufferedAPIHandler(compat.TopContainer)).Methods(http.MethodGet)
 	// swagger:operation POST /containers/{name}/unpause compat ContainerUnpause
 	// ---
 	// tags:
@@ -678,9 +677,9 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 
 	// swagger:operation POST /libpod/containers/create libpod ContainerCreateLibpod
 	// ---
-	//   summary: Create a container
 	//   tags:
 	//    - containers
+	//   summary: Create a container
 	//   produces:
 	//   - application/json
 	//   parameters:
@@ -689,6 +688,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//      description: attributes for creating a container
 	//      schema:
 	//        $ref: "#/definitions/SpecGenerator"
+	//      required: true
 	//   responses:
 	//     201:
 	//       $ref: "#/responses/containerCreateResponse"
@@ -722,6 +722,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: boolean
 	//    description: Include namespace information
 	//    default: false
+	//  - in: query
 	//    name: pod
 	//    type: boolean
 	//    default: false
@@ -896,7 +897,7 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: signal
 	//    type: string
-	//    default: TERM
+	//    default: SIGKILL
 	//    description: signal to be sent to container, either by integer or SIG_ name
 	// produces:
 	// - application/json
@@ -1290,11 +1291,6 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    required: true
 	//    description: the name or ID of the container
 	//  - in: query
-	//    name: all
-	//    type: boolean
-	//    default: false
-	//    description: Stop all containers
-	//  - in: query
 	//    name: timeout
 	//    type: integer
 	//    default: 10
@@ -1457,7 +1453,23 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: ignoreRootFS
 	//    type: boolean
-	//    description: do not include root file-system changes when exporting
+	//    description: do not include root file-system changes when exporting. can only be used with export
+	//  - in: query
+	//    name: ignoreVolumes
+	//    type: boolean
+	//    description: do not include associated volumes. can only be used with export
+	//  - in: query
+	//    name: preCheckpoint
+	//    type: boolean
+	//    description: dump the container's memory information only, leaving the container running. only works on runc 1.0-rc or higher
+	//  - in: query
+	//    name: withPrevious
+	//    type: boolean
+	//    description: check out the container with previous criu image files in pre-dump. only works on runc 1.0-rc or higher
+	//  - in: query
+	//    name: fileLocks
+	//    type: boolean
+	//    description: checkpoint a container with filelocks
 	//  - in: query
 	//    name: printStats
 	//    type: boolean
@@ -1493,10 +1505,6 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: boolean
 	//    description: keep all temporary checkpoint files
 	//  - in: query
-	//    name: leaveRunning
-	//    type: boolean
-	//    description: leave the container running after writing checkpoint to disk
-	//  - in: query
 	//    name: tcpEstablished
 	//    type: boolean
 	//    description: checkpoint a container with established TCP connections
@@ -1507,7 +1515,11 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//  - in: query
 	//    name: ignoreRootFS
 	//    type: boolean
-	//    description: do not include root file-system changes when exporting
+	//    description: do not include root file-system changes when exporting. can only be used with import
+	//  - in: query
+	//    name: ignoreVolumes
+	//    type: boolean
+	//    description: do not restore associated volumes. can only be used with import
 	//  - in: query
 	//    name: ignoreStaticIP
 	//    type: boolean
@@ -1517,9 +1529,17 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: boolean
 	//    description: ignore MAC address if set statically
 	//  - in: query
+	//    name: fileLocks
+	//    type: boolean
+	//    description: restore a container with file locks
+	//  - in: query
 	//    name: printStats
 	//    type: boolean
 	//    description: add restore statistics to the returned RestoreReport
+	//  - in: query
+	//    name: pod
+	//    type: string
+	//    description: pod to restore into
 	// produces:
 	// - application/json
 	// responses:
@@ -1625,5 +1645,33 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//   500:
 	//     $ref: "#/responses/internalError"
 	r.HandleFunc(VersionedPath("/libpod/containers/{name}/rename"), s.APIHandler(compat.RenameContainer)).Methods(http.MethodPost)
+	// swagger:operation POST /libpod/containers/{name}/update libpod ContainerUpdateLibpod
+	// ---
+	// tags:
+	//   - containers
+	// summary: Update an existing containers cgroup configuration
+	// description: Update an existing containers cgroup configuration.
+	// parameters:
+	//  - in: path
+	//    name: name
+	//    type: string
+	//    required: true
+	//    description: Full or partial ID or full name of the container to update
+	//  - in: body
+	//    name: resources
+	//    description: attributes for updating the container
+	//    schema:
+	//      $ref: "#/definitions/UpdateEntities"
+	// produces:
+	// - application/json
+	// responses:
+	//   responses:
+	//     201:
+	//       $ref: "#/responses/containerUpdateResponse"
+	//   404:
+	//     $ref: "#/responses/containerNotFound"
+	//   500:
+	//     $ref: "#/responses/internalError"
+	r.HandleFunc(VersionedPath("/libpod/containers/{name}/update"), s.APIHandler(libpod.UpdateContainer)).Methods(http.MethodPost)
 	return nil
 }

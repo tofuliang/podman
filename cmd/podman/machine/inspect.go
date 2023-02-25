@@ -11,7 +11,6 @@ import (
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/utils"
 	"github.com/containers/podman/v4/pkg/machine"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +19,7 @@ var (
 		Use:               "inspect [options] [MACHINE...]",
 		Short:             "Inspect an existing machine",
 		Long:              "Provide details on a managed virtual machine",
+		PersistentPreRunE: rootlessOnly,
 		RunE:              inspect,
 		Example:           `podman machine inspect myvm`,
 		ValidArgsFunction: autocompleteMachine,
@@ -65,28 +65,23 @@ func inspect(cmd *cobra.Command, args []string) error {
 		}
 		vms = append(vms, *ii)
 	}
+
 	switch {
 	case cmd.Flag("format").Changed:
-		row := report.NormalizeFormat(inspectFlag.format)
-		row = report.EnforceRange(row)
+		rpt := report.New(os.Stdout, cmd.Name())
+		defer rpt.Flush()
 
-		tmpl, err := report.NewTemplate("Machine inspect").Parse(row)
+		rpt, err := rpt.Parse(report.OriginUser, inspectFlag.format)
 		if err != nil {
 			return err
 		}
 
-		w, err := report.NewWriterDefault(os.Stdout)
-		if err != nil {
-			return err
+		if err := rpt.Execute(vms); err != nil {
+			errs = append(errs, err)
 		}
-
-		if err := tmpl.Execute(w, vms); err != nil {
-			logrus.Error(err)
-		}
-		w.Flush()
 	default:
 		if err := printJSON(vms); err != nil {
-			logrus.Error(err)
+			errs = append(errs, err)
 		}
 	}
 	return errs.PrintErrors()

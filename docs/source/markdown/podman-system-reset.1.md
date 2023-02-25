@@ -1,4 +1,4 @@
-% podman-system-reset(1)
+% podman-system-reset 1
 
 ## NAME
 podman\-system\-reset - Reset storage back to initial state
@@ -37,6 +37,7 @@ WARNING! This will remove:
         - all networks
         - all build cache
         - all machines
+        - all volumes
 Are you sure you want to continue? [y/N] y
 ```
 

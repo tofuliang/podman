@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/user"
@@ -95,27 +94,27 @@ var _ = Describe("Podman Info", func() {
 			os.Unsetenv("CONTAINERS_STORAGE_CONF")
 		}()
 		err := os.RemoveAll(filepath.Dir(configPath))
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		err = os.MkdirAll(filepath.Dir(configPath), os.ModePerm)
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		rootlessStoragePath := `"/tmp/$HOME/$USER/$UID/storage"`
 		driver := `"overlay"`
 		storageOpt := `"/usr/bin/fuse-overlayfs"`
 		storageConf := []byte(fmt.Sprintf("[storage]\ndriver=%s\nrootless_storage_path=%s\n[storage.options]\nmount_program=%s", driver, rootlessStoragePath, storageOpt))
-		err = ioutil.WriteFile(configPath, storageConf, os.ModePerm)
-		Expect(err).To(BeNil())
+		err = os.WriteFile(configPath, storageConf, os.ModePerm)
+		Expect(err).ToNot(HaveOccurred())
 
 		u, err := user.Current()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 
 		// Cannot use podmanTest.Podman() and test for storage path
 		expect := filepath.Join("/tmp", os.Getenv("HOME"), u.Username, u.Uid, "storage")
 		podmanPath := podmanTest.PodmanTest.PodmanBinary
 		cmd := exec.Command(podmanPath, "info", "--format", "{{.Store.GraphRoot -}}")
 		out, err := cmd.CombinedOutput()
-		Expect(err).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 		Expect(string(out)).To(Equal(expect))
 	})
 
@@ -151,5 +150,35 @@ var _ = Describe("Podman Info", func() {
 		Expect(session).To(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("memory"))
 		Expect(session.OutputToString()).To(ContainSubstring("pids"))
+	})
+
+	It("Podman info: check desired runtime", func() {
+		// defined in .cirrus.yml
+		want := os.Getenv("CI_DESIRED_RUNTIME")
+		if want == "" {
+			if os.Getenv("CIRRUS_CI") == "" {
+				Skip("CI_DESIRED_RUNTIME is not set--this is OK because we're not running under Cirrus")
+			}
+			Fail("CIRRUS_CI is set, but CI_DESIRED_RUNTIME is not! See #14912")
+		}
+		session := podmanTest.Podman([]string{"info", "--format", "{{.Host.OCIRuntime.Name}}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).To(Exit(0))
+		Expect(session.OutputToString()).To(Equal(want))
+	})
+
+	It("Podman info: check desired network backend", func() {
+		// defined in .cirrus.yml
+		want := os.Getenv("CI_DESIRED_NETWORK")
+		if want == "" {
+			if os.Getenv("CIRRUS_CI") == "" {
+				Skip("CI_DESIRED_NETWORK is not set--this is OK because we're not running under Cirrus")
+			}
+			Fail("CIRRUS_CI is set, but CI_DESIRED_NETWORK is not! See #16389")
+		}
+		session := podmanTest.Podman([]string{"info", "--format", "{{.Host.NetworkBackend}}"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).To(Exit(0))
+		Expect(session.OutputToString()).To(Equal(want))
 	})
 })

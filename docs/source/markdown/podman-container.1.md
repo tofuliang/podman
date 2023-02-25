@@ -1,4 +1,4 @@
-% podman-container(1)
+% podman-container 1
 
 ## NAME
 podman\-container - Manage containers
@@ -7,7 +7,7 @@ podman\-container - Manage containers
 **podman container** *subcommand*
 
 ## DESCRIPTION
-The container command allows you to manage containers
+The container command allows management of containers
 
 ## COMMANDS
 
@@ -15,12 +15,12 @@ The container command allows you to manage containers
 | ---------  | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | attach     | [podman-attach(1)](podman-attach.1.md)              | Attach to a running container.                                               |
 | checkpoint | [podman-container-checkpoint(1)](podman-container-checkpoint.1.md)  | Checkpoints one or more running containers.                  |
-| cleanup    | [podman-container-cleanup(1)](podman-container-cleanup.1.md)    | Cleanup the container's network and mountpoints.                 |
+| cleanup    | [podman-container-cleanup(1)](podman-container-cleanup.1.md)    | Clean up the container's network and mountpoints.                |
 | clone      | [podman-container-clone(1)](podman-container-clone.1.md)      |  Creates a copy of an existing container.                          |
 | commit     | [podman-commit(1)](podman-commit.1.md)              | Create new image based on the changed container.                             |
 | cp         | [podman-cp(1)](podman-cp.1.md)                      | Copy files/folders between a container and the local filesystem.             |
 | create     | [podman-create(1)](podman-create.1.md)              | Create a new container.                                                      |
-| diff       | [podman-container-diff(1)](podman-container-diff.1.md) | Inspect changes on a container's filesystem                               |
+| diff       | [podman-container-diff(1)](podman-container-diff.1.md)        |  Inspect changes on a container's filesystem |
 | exec       | [podman-exec(1)](podman-exec.1.md)                  | Execute a command in a running container.                                    |
 | exists     | [podman-container-exists(1)](podman-container-exists.1.md)  | Check if a container exists in local storage                         |
 | export     | [podman-export(1)](podman-export.1.md)              | Export a container's filesystem contents as a tar archive.                   |
@@ -46,6 +46,7 @@ The container command allows you to manage containers
 | top        | [podman-top(1)](podman-top.1.md)                    | Display the running processes of a container.                                |
 | unmount    | [podman-unmount(1)](podman-unmount.1.md)            | Unmount a working container's root filesystem.(Alias unmount)                |
 | unpause    | [podman-unpause(1)](podman-unpause.1.md)            | Unpause one or more containers.                                              |
+| update     | [podman-update(1)](podman-update.1.md)              | Updates the cgroup configuration of a given container.                      |
 | wait       | [podman-wait(1)](podman-wait.1.md)                  | Wait on one or more containers to stop and print their exit codes.           |
 
 ## SEE ALSO

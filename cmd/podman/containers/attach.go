@@ -1,13 +1,14 @@
 package containers
 
 import (
+	"errors"
 	"os"
+	"strings"
 
 	"github.com/containers/podman/v4/cmd/podman/common"
 	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/containers/podman/v4/cmd/podman/validate"
 	"github.com/containers/podman/v4/pkg/domain/entities"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -70,12 +71,12 @@ func init() {
 
 func attach(cmd *cobra.Command, args []string) error {
 	if len(args) > 1 || (len(args) == 0 && !attachOpts.Latest) {
-		return errors.Errorf("attach requires the name or id of one running container or the latest flag")
+		return errors.New("attach requires the name or id of one running container or the latest flag")
 	}
 
 	var name string
 	if len(args) > 0 {
-		name = args[0]
+		name = strings.TrimPrefix(args[0], "/")
 	}
 	attachOpts.Stdin = os.Stdin
 	if attachOpts.NoStdin {

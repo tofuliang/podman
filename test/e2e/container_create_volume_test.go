@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -15,8 +14,8 @@ import (
 func buildDataVolumeImage(pTest *PodmanTestIntegration, image, data, dest string) {
 	// Create a dummy file for data volume
 	dummyFile := filepath.Join(pTest.TempDir, data)
-	err := ioutil.WriteFile(dummyFile, []byte(data), 0644)
-	Expect(err).To(BeNil())
+	err := os.WriteFile(dummyFile, []byte(data), 0644)
+	Expect(err).ToNot(HaveOccurred())
 
 	// Create a data volume container image but no CMD binary in it
 	containerFile := fmt.Sprintf(`FROM scratch
@@ -29,8 +28,8 @@ VOLUME %s/`, data, dest, dest)
 func createContainersConfFile(pTest *PodmanTestIntegration) {
 	configPath := filepath.Join(pTest.TempDir, "containers.conf")
 	containersConf := []byte("[containers]\nprepare_volume_on_create = true\n")
-	err := ioutil.WriteFile(configPath, containersConf, os.ModePerm)
-	Expect(err).To(BeNil())
+	err := os.WriteFile(configPath, containersConf, os.ModePerm)
+	Expect(err).ToNot(HaveOccurred())
 
 	// Set custom containers.conf file
 	os.Setenv("CONTAINERS_CONF", configPath)
@@ -58,8 +57,8 @@ func checkDataVolumeContainer(pTest *PodmanTestIntegration, image, cont, dest, d
 	Expect(volList.OutputToStringArray()[0]).To(Equal(mntName))
 
 	// Check the mount source directory
-	files, err := ioutil.ReadDir(mntSource)
-	Expect(err).To(BeNil())
+	files, err := os.ReadDir(mntSource)
+	Expect(err).ToNot(HaveOccurred())
 
 	if data == "" {
 		Expect(files).To(BeEmpty())

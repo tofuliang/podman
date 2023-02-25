@@ -4,6 +4,7 @@
 #
 
 load helpers
+load helpers.network
 
 @test "podman network - basic tests" {
     heading="NETWORK *ID *NAME *DRIVER"
@@ -12,6 +13,9 @@ load helpers
 
     run_podman network ls --noheading
     assert "$output" !~ "$heading" "network ls --noheading shows header anyway"
+
+    run_podman network ls -n
+    assert "$output" !~ "$heading" "network ls -n shows header anyway"
 
     # check deterministic list order
     local net1=a-$(random_string 10)
@@ -61,9 +65,9 @@ load helpers
     is "$output" "$random_2" "curl 127.0.0.1:/index2.txt"
 
     # Verify http contents: wget from a second container
-    run_podman run --rm --net=host $IMAGE wget -qO - $SERVER/index.txt
+    run_podman run --rm --net=host --http-proxy=false $IMAGE wget -qO - $SERVER/index.txt
     is "$output" "$random_1" "podman wget /index.txt"
-    run_podman run --rm --net=host $IMAGE wget -qO - $SERVER/index2.txt
+    run_podman run --rm --net=host --http-proxy=false $IMAGE wget -qO - $SERVER/index2.txt
     is "$output" "$random_2" "podman wget /index2.txt"
 
     # Tests #4889 - two-argument form of "podman ports" was broken
@@ -84,6 +88,7 @@ load helpers
 
 # Issue #5466 - port-forwarding doesn't work with this option and -d
 @test "podman networking: port with --userns=keep-id for rootless or --uidmap=* for rootful" {
+    skip_if_cgroupsv1 "FIXME: #15025: run --uidmap fails on cgroups v1"
     for cidr in "" "$(random_rfc1918_subnet).0/24"; do
         myport=$(random_free_port 52000-52999)
         if [[ -z $cidr ]]; then
@@ -110,6 +115,10 @@ load helpers
         run_podman run -d ${userns} $network_arg -p 127.0.0.1:$myport:$myport \
                    $IMAGE nc -l -n -v -p $myport
         cid="$output"
+
+        # check that podman stores the network info correctly when a userns is used (#14465)
+        run_podman container inspect --format "{{.NetworkSettings.SandboxKey}}" $cid
+        assert "$output" =~ ".*/netns/netns-.*" "Netns path should be set"
 
         wait_for_output "listening on .*:$myport .*" $cid
 
@@ -161,6 +170,9 @@ load helpers
 
     run_podman pod rm $pod_name
     is "$output" "$pid" "Only ID in output (no extra errors)"
+
+    # Clean up
+    run_podman rmi $(pause_image)
 }
 
 @test "podman run with slirp4ns assigns correct addresses to /etc/hosts" {
@@ -197,8 +209,7 @@ load helpers
 
 # "network create" now works rootless, with the help of a special container
 @test "podman network create" {
-    # Deliberately use a fixed port, not random_open_port, because of #10806
-    myport=54322
+    myport=$(random_free_port)
 
     local mynetname=testnet-$(random_string 10)
     local mysubnet=$(random_rfc1918_subnet)
@@ -215,7 +226,7 @@ load helpers
        "sdfsdf"
 
     run_podman run -d --network $mynetname -p 127.0.0.1:$myport:$myport \
-	       $IMAGE nc -l -n -v -p $myport
+               $IMAGE nc -l -n -v -p $myport
     cid="$output"
 
     # FIXME: debugging for #11871
@@ -252,7 +263,7 @@ load helpers
 
     run_podman rm -t 0 -f $cid
     run_podman network rm $mynetname
-    run_podman 1 network rm -f $mynetname
+    run_podman 1 network rm $mynetname
 }
 
 @test "podman network reload" {
@@ -352,7 +363,7 @@ load helpers
     run curl -s $SERVER/index.txt
     is "$output" "$random_1" "curl 127.0.0.1:/index.txt"
 
-    # cleanup the container
+    # clean up the container
     run_podman rm -t 0 -f $cid
 
     # test that we cannot remove the default network
@@ -542,7 +553,7 @@ load helpers
     run curl --max-time 3 -s $SERVER/index.txt
     is "$output" "$random_1" "curl 127.0.0.1:/index.txt should still work"
 
-    # cleanup
+    # clean up
     run_podman rm -t 0 -f $cid $background_cid
     run_podman network rm -t 0 -f $netname $netname2
 }
@@ -615,7 +626,7 @@ load helpers
         run_podman rm -t 0 -f $cid
     done
 
-    # Cleanup network
+    # Clean up network
     run_podman network rm -t 0 -f $netname
 }
 
@@ -640,7 +651,7 @@ EOF
 "
 
     CONTAINERS_CONF=$containersconf run_podman run --rm $IMAGE cat /etc/resolv.conf
-    is "$output" "search example.com$nl.*" "correct search domain"
+    is "$output" "search example.com.*" "correct search domain"
     is "$output" ".*nameserver 1.1.1.1${nl}nameserver $searchIP${nl}nameserver 1.0.0.1${nl}nameserver 8.8.8.8" "nameserver order is correct"
 
     # create network with dns
@@ -649,37 +660,52 @@ EOF
     run_podman network create --subnet "$subnet.0/24"  $netname
     # custom server overwrites the network dns server
     CONTAINERS_CONF=$containersconf run_podman run --network $netname --rm $IMAGE cat /etc/resolv.conf
-    is "$output" "search example.com$nl.*" "correct search domain"
-    is "$output" ".*nameserver 1.1.1.1${nl}nameserver $searchIP${nl}nameserver 1.0.0.1${nl}nameserver 8.8.8.8" "nameserver order is correct"
-
+    is "$output" "search example.com.*" "correct search domain"
+    local store=$output
+    if is_netavark; then
+        assert "$store" == "search example.com${nl}nameserver $subnet.1" "only integrated dns nameserver is set"
+    else
+        assert "$store" == "search example.com
+nameserver 1.1.1.1
+nameserver $searchIP
+nameserver 1.0.0.1
+nameserver 8.8.8.8" "nameserver order is correct"
+    fi
     # we should use the integrated dns server
     run_podman run --network $netname --rm $IMAGE cat /etc/resolv.conf
-    is "$output" "search dns.podman.*" "correct search domain"
-    is "$output" ".*nameserver $subnet.1.*" "integrated dns nameserver is set"
+    assert "$output" =~ "search dns.podman.*" "correct search domain"
+    assert "$output" =~ ".*nameserver $subnet.1.*" \
+           "integrated dns nameserver is set"
 
     # host network should keep localhost nameservers
     if grep 127.0.0. /etc/resolv.conf >/dev/null; then
         run_podman run --network host --rm $IMAGE cat /etc/resolv.conf
-        is "$output" ".*nameserver 127\.0\.0.*" "resolv.conf contains localhost nameserver"
+        assert "$output" =~ ".*nameserver 127\.0\.0.*" \
+               "resolv.conf contains localhost nameserver"
     fi
     # host net + dns still works
     run_podman run --network host --dns 1.1.1.1 --rm $IMAGE cat /etc/resolv.conf
-    is "$output" ".*nameserver 1\.1\.1\.1.*" "resolv.conf contains 1.1.1.1 nameserver"
+    assert "$output" =~ ".*nameserver 1\.1\.1\.1.*" \
+           "resolv.conf contains 1.1.1.1 nameserver"
 }
 
 @test "podman run port forward range" {
     for netmode in bridge slirp4netns:port_handler=slirp4netns slirp4netns:port_handler=rootlesskit; do
-        local port=$(random_free_port)
-        local end_port=$(( $port + 2 ))
-        local range="$port-$end_port:$port-$end_port"
+        local range=$(random_free_port_range 3)
+        # die() inside $(...) does not actually stop us.
+        assert "$range" != "" "Could not find free port range"
+
+        local port="${range%-*}"
+        local end_port="${range#*-}"
         local random=$(random_string)
 
-        run_podman run --network $netmode -p "$range" -d $IMAGE sleep inf
+        run_podman run --network $netmode -p "$range:$range" -d $IMAGE sleep inf
         cid="$output"
         for port in $(seq $port $end_port); do
             run_podman exec -d $cid nc -l -p $port -e /bin/cat
-            # -w 1 adds a 1 second timeout, for some reason ubuntus ncat doesn't close the connection on EOF,
-            # other options to change this are not portable across distros but -w seems to work
+            # -w 1 adds a 1 second timeout. For some reason, ubuntu's ncat
+            # doesn't close the connection on EOF, and other options to
+            # change this are not portable across distros. -w seems to work.
             run nc -w 1 127.0.0.1 $port <<<$random
             is "$output" "$random" "ncat got data back (netmode=$netmode port=$port)"
         done
@@ -733,6 +759,7 @@ EOF
 }
 
 @test "podman run /etc/* permissions" {
+    skip_if_cgroupsv1 "FIXME: #15025: run --uidmap fails on cgroups v1"
     userns="--userns=keep-id"
     if ! is_rootless; then
         userns="--uidmap=0:1111111:65536 --gidmap=0:1111111:65536"
@@ -745,6 +772,38 @@ EOF
         is "${lines[1]}" "0\:0" "/etc/resolv.conf owned by root"
         is "${lines[2]}" "0\:0" "/etc/hosts owned by root"
     done
+}
+
+@test "podman network rm --force bogus" {
+    run_podman 1 network rm bogus
+    is "$output" "Error: unable to find network with name or ID bogus: network not found" "Should print error"
+    run_podman network rm --force bogus
+    is "$output" "" "Should print no output"
+}
+
+@test "podman network rm --dns-option " {
+    dns_opt=dns$(random_string)
+    run_podman run --rm --dns-opt=${dns_opt} $IMAGE cat /etc/resolv.conf
+    is "$output" ".*options ${dns_opt}" "--dns-opt was added"
+
+    dns_opt=dns$(random_string)
+    run_podman run --rm --dns-option=${dns_opt} $IMAGE cat /etc/resolv.conf
+    is "$output" ".*options ${dns_opt}" "--dns-option was added"
+}
+
+@test "podman rootless netns works when XDG_RUNTIME_DIR includes symlinks" {
+    # regression test for https://github.com/containers/podman/issues/14606
+    is_rootless || skip "only meaningful for rootless"
+
+    # Create a tmpdir symlink pointing to /run, and use it briefly
+    ln -s /run $PODMAN_TMPDIR/run
+    local tmp_run=$PODMAN_TMPDIR/run/user/$(id -u)
+    test -d $tmp_run || skip "/run/user/MYUID unavailable"
+
+    # This 'run' would previously fail with:
+    #    IPAM error: failed to open database ....
+    XDG_RUNTIME_DIR=$tmp_run run_podman run --network bridge --rm $IMAGE ip a
+    assert "$output" =~ "eth0"
 }
 
 # vim: filetype=sh

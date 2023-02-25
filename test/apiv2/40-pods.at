@@ -134,4 +134,20 @@ t GET libpod/pods/json?filters='{"label":["testl' 400 \
 t DELETE  libpod/pods/foo 200
 t DELETE "libpod/pods/foo (pod has already been deleted)" 404
 
+# Expect this to time out
+APIV2_TEST_EXPECT_TIMEOUT=5 t GET "libpod/pods/stats?stream=true&delay=1" 999
+
+podman pod create --name=specgen
+
+TMPD=$(mktemp -d podman-apiv2-test.build.XXXXXXXX)
+
+podman generate spec -f ${TMPD}/myspec.json -c specgen
+
+t POST libpod/pods/create ${TMPD}/myspec.json 201 \
+  .Id~[0-9a-f]\\{64\\}
+
+rm -rf $TMPD
+
+podman pod rm -fa
+
 # vim: filetype=sh

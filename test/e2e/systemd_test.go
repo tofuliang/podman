@@ -2,7 +2,6 @@ package integration
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,16 +27,16 @@ var _ = Describe("Podman systemd", func() {
 		}
 		podmanTest = PodmanTestCreate(tempdir)
 		podmanTest.Setup()
-		systemdUnitFile = `[Unit]
+		systemdUnitFile = fmt.Sprintf(`[Unit]
 Description=redis container
 [Service]
 Restart=always
-ExecStart=/usr/bin/podman start -a redis
-ExecStop=/usr/bin/podman stop -t 10 redis
+ExecStart=%s start -a redis
+ExecStop=%s stop -t 10 redis
 KillMode=process
 [Install]
 WantedBy=default.target
-`
+`, podmanTest.PodmanBinary, podmanTest.PodmanBinary)
 	})
 
 	AfterEach(func() {
@@ -51,8 +50,8 @@ WantedBy=default.target
 		SkipIfRootless("rootless can not write to /etc")
 		SkipIfContainerized("test does not have systemd as pid 1")
 
-		sysFile := ioutil.WriteFile("/etc/systemd/system/redis.service", []byte(systemdUnitFile), 0644)
-		Expect(sysFile).To(BeNil())
+		sysFile := os.WriteFile("/etc/systemd/system/redis.service", []byte(systemdUnitFile), 0644)
+		Expect(sysFile).ToNot(HaveOccurred())
 		defer func() {
 			stop := SystemExec("bash", []string{"-c", "systemctl stop redis"})
 			os.Remove("/etc/systemd/system/redis.service")
@@ -60,7 +59,7 @@ WantedBy=default.target
 			Expect(stop).Should(Exit(0))
 		}()
 
-		create := podmanTest.Podman([]string{"create", "--name", "redis", redis})
+		create := podmanTest.Podman([]string{"create", "--name", "redis", REDIS_IMAGE})
 		create.WaitWithDefaultTimeout()
 		Expect(create).Should(Exit(0))
 
@@ -79,7 +78,7 @@ WantedBy=default.target
 
 	It("podman run container with systemd PID1", func() {
 		ctrName := "testSystemd"
-		run := podmanTest.Podman([]string{"run", "--name", ctrName, "-t", "-i", "-d", UBI_INIT, "/sbin/init"})
+		run := podmanTest.Podman([]string{"run", "--name", ctrName, "-t", "-i", "-d", SYSTEMD_IMAGE, "/sbin/init"})
 		run.WaitWithDefaultTimeout()
 		Expect(run).Should(Exit(0))
 
@@ -88,7 +87,7 @@ WantedBy=default.target
 		Expect(logs).Should(Exit(0))
 
 		// Give container 10 seconds to start
-		started := podmanTest.WaitContainerReady(ctrName, "Reached target Multi-User System.", 30, 1)
+		started := podmanTest.WaitContainerReady(ctrName, "Reached target multi-user.target - Multi-User System.", 30, 1)
 		Expect(started).To(BeTrue())
 
 		systemctl := podmanTest.Podman([]string{"exec", "-t", "-i", ctrName, "systemctl", "status", "--no-pager"})
@@ -114,12 +113,12 @@ WantedBy=default.target
 		cgroupPath := podmanTest.Podman([]string{"inspect", "--format='{{.State.CgroupPath}}'", ctrName})
 		cgroupPath.WaitWithDefaultTimeout()
 		Expect(cgroupPath).Should(Exit(0))
-		Expect(result.OutputToString()).To(Not(ContainSubstring("init.scope")))
+		Expect(cgroupPath.OutputToString()).To(Not(ContainSubstring("init.scope")))
 	})
 
 	It("podman create container with systemd entrypoint triggers systemd mode", func() {
 		ctrName := "testCtr"
-		run := podmanTest.Podman([]string{"create", "--name", ctrName, "--entrypoint", "/sbin/init", UBI_INIT})
+		run := podmanTest.Podman([]string{"create", "--name", ctrName, "--entrypoint", "/sbin/init", SYSTEMD_IMAGE})
 		run.WaitWithDefaultTimeout()
 		Expect(run).Should(Exit(0))
 
@@ -137,8 +136,8 @@ RUN mkdir -p /usr/lib/systemd/; touch /usr/lib/systemd/systemd
 CMD /usr/lib/systemd/systemd`, ALPINE)
 
 		containerfilePath := filepath.Join(podmanTest.TempDir, "Containerfile")
-		err := ioutil.WriteFile(containerfilePath, []byte(containerfile), 0755)
-		Expect(err).To(BeNil())
+		err := os.WriteFile(containerfilePath, []byte(containerfile), 0755)
+		Expect(err).ToNot(HaveOccurred())
 		session := podmanTest.Podman([]string{"build", "-t", "systemd", "--file", containerfilePath, podmanTest.TempDir})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
@@ -167,8 +166,8 @@ CMD /usr/lib/systemd/systemd`, ALPINE)
 		Expect(session).Should(Exit(0))
 
 		pidFile := strings.TrimSuffix(session.OutputToString(), "\n")
-		_, err := ioutil.ReadFile(pidFile)
-		Expect(err).To(BeNil())
+		_, err := os.ReadFile(pidFile)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("podman create container with systemd=always triggers systemd mode", func() {

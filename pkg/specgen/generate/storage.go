@@ -2,6 +2,7 @@ package generate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -16,11 +17,8 @@ import (
 	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/containers/podman/v4/pkg/util"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
-
-var errDuplicateDest = errors.Errorf("duplicate mount destination")
 
 // Produce final mounts and named volumes for a container
 func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Runtime, rtc *config.Config, img *libimage.Image) ([]spec.Mount, []*specgen.NamedVolume, []*specgen.OverlayVolume, error) {
@@ -63,7 +61,7 @@ func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Ru
 		}
 		cleanDestination := filepath.Clean(m.Destination)
 		if _, ok := unifiedMounts[cleanDestination]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict in specified mounts - multiple mounts at %q", cleanDestination)
+			return nil, nil, nil, fmt.Errorf("%q: %w", cleanDestination, specgen.ErrDuplicateDest)
 		}
 		unifiedMounts[cleanDestination] = m
 	}
@@ -84,7 +82,7 @@ func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Ru
 		}
 		cleanDestination := filepath.Clean(v.Dest)
 		if _, ok := unifiedVolumes[cleanDestination]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict in specified volumes - multiple volumes at %q", cleanDestination)
+			return nil, nil, nil, fmt.Errorf("conflict in specified volumes - multiple volumes at %q: %w", cleanDestination, specgen.ErrDuplicateDest)
 		}
 		unifiedVolumes[cleanDestination] = v
 	}
@@ -105,7 +103,7 @@ func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Ru
 		}
 		cleanDestination := filepath.Clean(v.Destination)
 		if _, ok := unifiedOverlays[cleanDestination]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict in specified volumes - multiple volumes at %q", cleanDestination)
+			return nil, nil, nil, fmt.Errorf("conflict in specified volumes - multiple volumes at %q: %w", cleanDestination, specgen.ErrDuplicateDest)
 		}
 		unifiedOverlays[cleanDestination] = v
 	}
@@ -131,7 +129,7 @@ func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Ru
 			return nil, nil, nil, err
 		}
 		if _, ok := unifiedMounts[initMount.Destination]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict with mount added by --init to %q", initMount.Destination)
+			return nil, nil, nil, fmt.Errorf("conflict with mount added by --init to %q: %w", initMount.Destination, specgen.ErrDuplicateDest)
 		}
 		unifiedMounts[initMount.Destination] = initMount
 	}
@@ -161,21 +159,26 @@ func finalizeMounts(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Ru
 	// Check for conflicts between named volumes and mounts
 	for dest := range baseMounts {
 		if _, ok := baseVolumes[dest]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict at mount destination %v", dest)
+			return nil, nil, nil, fmt.Errorf("baseMounts conflict at mount destination %v: %w", dest, specgen.ErrDuplicateDest)
 		}
 	}
 	for dest := range baseVolumes {
 		if _, ok := baseMounts[dest]; ok {
-			return nil, nil, nil, errors.Wrapf(errDuplicateDest, "conflict at mount destination %v", dest)
+			return nil, nil, nil, fmt.Errorf("baseVolumes conflict at mount destination %v: %w", dest, specgen.ErrDuplicateDest)
 		}
 	}
+
+	if s.ReadWriteTmpfs {
+		baseMounts = addReadWriteTmpfsMounts(baseMounts, s.Volumes)
+	}
+
 	// Final step: maps to arrays
 	finalMounts := make([]spec.Mount, 0, len(baseMounts))
 	for _, mount := range baseMounts {
 		if mount.Type == define.TypeBind {
 			absSrc, err := filepath.Abs(mount.Source)
 			if err != nil {
-				return nil, nil, nil, errors.Wrapf(err, "error getting absolute path of %s", mount.Source)
+				return nil, nil, nil, fmt.Errorf("getting absolute path of %s: %w", mount.Source, err)
 			}
 			mount.Source = absSrc
 		}
@@ -208,7 +211,7 @@ func getImageVolumes(ctx context.Context, img *libimage.Image, s *specgen.SpecGe
 
 	inspect, err := img.Inspect(ctx, nil)
 	if err != nil {
-		return nil, nil, errors.Wrapf(err, "error inspecting image to get image volumes")
+		return nil, nil, fmt.Errorf("inspecting image to get image volumes: %w", err)
 	}
 	for volume := range inspect.Config.Volumes {
 		logrus.Debugf("Image has volume at %q", volume)
@@ -252,16 +255,16 @@ func getVolumesFrom(volumesFrom []string, runtime *libpod.Runtime) (map[string]s
 				switch opt {
 				case "z":
 					if setZ {
-						return nil, nil, errors.Errorf("cannot set :z more than once in mount options")
+						return nil, nil, errors.New("cannot set :z more than once in mount options")
 					}
 					setZ = true
 				case "ro", "rw":
 					if setRORW {
-						return nil, nil, errors.Errorf("cannot set ro or rw options more than once")
+						return nil, nil, errors.New("cannot set ro or rw options more than once")
 					}
 					setRORW = true
 				default:
-					return nil, nil, errors.Errorf("invalid option %q specified - volumes from another container can only use z,ro,rw options", opt)
+					return nil, nil, fmt.Errorf("invalid option %q specified - volumes from another container can only use z,ro,rw options", opt)
 				}
 			}
 			options = splitOpts
@@ -269,7 +272,7 @@ func getVolumesFrom(volumesFrom []string, runtime *libpod.Runtime) (map[string]s
 
 		ctr, err := runtime.LookupContainer(splitVol[0])
 		if err != nil {
-			return nil, nil, errors.Wrapf(err, "error looking up container %q for volumes-from", splitVol[0])
+			return nil, nil, fmt.Errorf("looking up container %q for volumes-from: %w", splitVol[0], err)
 		}
 
 		logrus.Debugf("Adding volumes from container %s", ctr.ID())
@@ -288,9 +291,9 @@ func getVolumesFrom(volumesFrom []string, runtime *libpod.Runtime) (map[string]s
 
 		// Now we get the container's spec and loop through its volumes
 		// and append them in if we can find them.
-		spec := ctr.Spec()
+		spec := ctr.ConfigNoCopy().Spec
 		if spec == nil {
-			return nil, nil, errors.Errorf("retrieving container %s spec for volumes-from", ctr.ID())
+			return nil, nil, fmt.Errorf("retrieving container %s spec for volumes-from", ctr.ID())
 		}
 		for _, mnt := range spec.Mounts {
 			if mnt.Type != define.TypeBind {
@@ -364,16 +367,16 @@ func addContainerInitBinary(s *specgen.SpecGenerator, path string) (spec.Mount, 
 	}
 
 	if path == "" {
-		return mount, fmt.Errorf("please specify a path to the container-init binary")
+		return mount, errors.New("please specify a path to the container-init binary")
 	}
 	if !s.PidNS.IsPrivate() {
-		return mount, fmt.Errorf("cannot add init binary as PID 1 (PID namespace isn't private)")
+		return mount, errors.New("cannot add init binary as PID 1 (PID namespace isn't private)")
 	}
 	if s.Systemd == "always" {
-		return mount, fmt.Errorf("cannot use container-init binary with systemd=always")
+		return mount, errors.New("cannot use container-init binary with systemd=always")
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return mount, errors.Wrap(err, "container-init binary not found on the host")
+		return mount, fmt.Errorf("container-init binary not found on the host: %w", err)
 	}
 	return mount, nil
 }
@@ -428,4 +431,30 @@ func InitFSMounts(mounts []spec.Mount) error {
 		}
 	}
 	return nil
+}
+
+func addReadWriteTmpfsMounts(mounts map[string]spec.Mount, volumes []*specgen.NamedVolume) map[string]spec.Mount {
+	readonlyTmpfs := []string{"/tmp", "/var/tmp", "/run"}
+	options := []string{"rw", "rprivate", "nosuid", "nodev", "tmpcopyup"}
+	for _, dest := range readonlyTmpfs {
+		if _, ok := mounts[dest]; ok {
+			continue
+		}
+		for _, m := range volumes {
+			if m.Dest == dest {
+				continue
+			}
+		}
+		mnt := spec.Mount{
+			Destination: dest,
+			Type:        define.TypeTmpfs,
+			Source:      define.TypeTmpfs,
+			Options:     options,
+		}
+		if dest != "/run" {
+			mnt.Options = append(mnt.Options, "noexec")
+		}
+		mounts[dest] = mnt
+	}
+	return mounts
 }

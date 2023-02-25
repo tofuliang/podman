@@ -1,8 +1,11 @@
 name: Build Linux
 
 on:
-  workflow_dispatch
-
+  workflow_dispatch:
+    inputs:
+      commit:
+        default: 'master'
+        description: 'which commit should be build'
 jobs:
   build:
 
@@ -11,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
       with:
-        ref: '1ce7ddab5c579e2fa8367774a938cfa722cd5006'
+        ref: ${{ github.event.inputs.commit }}
 
     - name: Update golang
       run: |
@@ -19,6 +22,9 @@ jobs:
           git clone https://github.com/udhos/update-golang
           cd update-golang
           sudo ./update-golang.sh
+          echo "/usr/local/go/bin:$GITHUB_PATH" > $GITHUB_PATH
+          sudo rm -fr /usr/bin/go && sudo ln -s /usr/local/go/bin/go /usr/bin/
+          sudo rm -fr /usr/bin/gofmt && sudo ln -s /usr/local/go/bin/gofmt /usr/bin/
           go version
 
     - name: Install Dependencies
@@ -58,6 +64,12 @@ jobs:
       uses: 'marvinpinto/action-automatic-releases@latest'
       with:
         repo_token: '${{ secrets.GITHUB_TOKEN }}'
-        automatic_release_tag: true
+        automatic_release_tag: ${{ github.event.inputs.commit }}
         prerelease: false
         files: ./podman-*.tar.gz
+    - name: 失败调试
+      uses: P3TERX/ssh2actions@main
+      if: ${{ failure() }}
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}        

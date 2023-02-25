@@ -22,7 +22,7 @@
 
 # Default shell `/bin/sh` has different meanings depending on the platform.
 SHELL := /bin/bash
-GO ?= go
+GO=/usr/local/go/bin/go
 GO_LDFLAGS:= $(shell if $(GO) version|grep -q gccgo ; then echo "-gccgoflags"; else echo "-ldflags"; fi)
 GOCMD = CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO)
 COVERAGE_PATH ?= .coverage

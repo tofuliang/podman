@@ -7,10 +7,10 @@ name: rerun_cirrus_cron
 
 on:
     # Note: This only applies to the main branch.
-    schedule:
+    #schedule:
         # N/B: This should fire about an hour prior to check_cirrus_cron
         # so the re-runs have a chance to complete.
-        - cron:  '01 01 * * 1-5'
+        #- cron:  '01 01 * * 1-5'
     # Debug: Allow triggering job manually in github-actions WebUI
     workflow_dispatch: {}
     # Allow re-use of this workflow by other repositories
